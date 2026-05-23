@@ -56,8 +56,6 @@ tags:
     description: Proxy endpoints for YouTube comment management
   - name: YouTube Thumbnails
     description: Proxy endpoint for thumbnail uploads
-  - name: YouTube Captions
-    description: Proxy endpoint for caption listing
   - name: Analytics
     description: Flexible YouTube Analytics queries
   - name: Usage
@@ -2522,62 +2520,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/InsufficientPermissions"
-        "429":
-          $ref: "#/components/responses/QuotaExceeded"
-        "500":
-          $ref: "#/components/responses/InternalError"
-
-  # ─── YouTube Captions ───────────────────────────────────────
-
-  /youtube/captions/{videoId}:
-    get:
-      operationId: listCaptions
-      summary: List video captions
-      description: Lists available caption tracks for a YouTube video.
-      tags: [YouTube Captions]
-      x-quota-cost: 50
-      parameters:
-        - name: videoId
-          in: path
-          required: true
-          schema:
-            type: string
-          description: YouTube video ID
-        - name: channelId
-          in: query
-          required: true
-          schema:
-            type: string
-          description: YouTube channel ID (for auth)
-      responses:
-        "200":
-          description: List of caption tracks
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      description: YouTube caption resource
-                  error:
-                    type: "null"
-                  meta:
-                    type: object
-                    properties:
-                      quotaUnits:
-                        type: integer
-                        example: 50
-        "400":
-          description: Missing channelId
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/QuotaExceeded"
         "500":
