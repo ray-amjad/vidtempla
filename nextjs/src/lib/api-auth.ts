@@ -435,7 +435,7 @@ export function videoNotFoundError(reason: "not_owned" | "not_found") {
     return {
       code: "VIDEO_NOT_OWNED" as const,
       message: "This video belongs to a channel not connected to your account",
-      suggestion: "Connect the channel that owns this video, or use a third-party transcript service for unowned videos.",
+      suggestion: "Connect the channel that owns this video to access other features.",
       status: 403,
     };
   }

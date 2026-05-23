@@ -4,7 +4,6 @@ import { registerVideoTools } from "./videos";
 import { registerTemplateTools } from "./templates";
 import { registerContainerTools } from "./containers";
 import { registerAnalyticsTools } from "./analytics";
-import { registerCaptionTools } from "./captions";
 import { registerCommentTools } from "./comments";
 import { registerPlaylistTools } from "./playlists";
 
@@ -18,7 +17,6 @@ export function registerAllTools(server: McpServer) {
   registerTemplateTools(server);
   registerContainerTools(server);
   registerAnalyticsTools(server);
-  registerCaptionTools(server);
   registerCommentTools(server);
   registerPlaylistTools(server);
 }
