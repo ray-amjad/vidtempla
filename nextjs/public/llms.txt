@@ -118,9 +118,6 @@ All `/videos/{id}/*` endpoints accept either a VidTempla UUID or a YouTube video
 #### Thumbnails
 - `PUT /youtube/thumbnails/{videoId}?channelId=...` — Upload thumbnail (write) (quota: 50)
 
-#### Captions
-- `GET /youtube/captions/{videoId}?channelId=...` — List captions (quota: 50)
-
 ### Analytics
 
 - `POST /analytics/query` — Flexible YouTube Analytics query (read-only despite POST) (quota: YouTube Analytics quota)
