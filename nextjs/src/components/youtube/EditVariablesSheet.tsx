@@ -55,6 +55,7 @@ export default function EditVariablesSheet({
   onSuccess,
 }: EditVariablesSheetProps) {
   const { toast } = useToast();
+  const utils = api.useUtils();
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [formInitialized, setFormInitialized] = useState(false);
   const [driftDialogOpen, setDriftDialogOpen] = useState(false);
@@ -131,6 +132,10 @@ export default function EditVariablesSheet({
       force,
     });
 
+    // Refresh the cached variables (while the sheet is still open) so reopening
+    // shows the values we just saved instead of the stale pre-save cache.
+    await utils.dashboard.youtube.videos.getVariables.invalidate({ videoId });
+
     toast({
       title: 'Variables saved and update queued',
       description: 'Video variables have been saved and YouTube update is in progress.',
@@ -181,6 +186,7 @@ export default function EditVariablesSheet({
         videoId,
         strategy: 'keep_youtube_edit',
       });
+      await utils.dashboard.youtube.videos.getVariables.invalidate({ videoId });
       toast({
         title: 'YouTube edit kept',
         description: 'Video delinked from container. Your variable changes were discarded.',
