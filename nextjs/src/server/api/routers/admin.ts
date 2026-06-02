@@ -2,7 +2,7 @@ import { superAdminProcedure } from "../../trpc/init";
 import { router } from "../../trpc/init";
 import { db } from "@/db";
 import { user, subscriptions, youtubeChannels } from "@/db/schema";
-import { count, eq, gte, sql } from "drizzle-orm";
+import { count, desc, eq, gte, ne } from "drizzle-orm";
 
 export const siteAdminRouter = router({
   stats: superAdminProcedure.query(async () => {
@@ -19,9 +19,7 @@ export const siteAdminRouter = router({
         db
           .select({ count: count() })
           .from(subscriptions)
-          .where(
-            sql`${subscriptions.planTier} != 'free'`
-          ),
+          .where(ne(subscriptions.planTier, "free")),
         db.select({ count: count() }).from(youtubeChannels),
       ]);
 
@@ -45,7 +43,7 @@ export const siteAdminRouter = router({
       })
       .from(user)
       .leftJoin(subscriptions, eq(user.id, subscriptions.userId))
-      .orderBy(sql`${user.createdAt} DESC`)
+      .orderBy(desc(user.createdAt))
       .limit(50);
 
     return users;

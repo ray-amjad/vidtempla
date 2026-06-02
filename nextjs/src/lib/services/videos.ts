@@ -193,7 +193,7 @@ async function syncOwnedChannelVideos(
         .where(
           and(
             eq(youtubeChannels.id, tokens.channelDbId),
-            sql`${youtubeChannels.driftBaselinedAt} IS NULL`
+            isNull(youtubeChannels.driftBaselinedAt)
           )
         );
     }

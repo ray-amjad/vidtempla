@@ -17,7 +17,7 @@ import {
 } from "@/lib/stripe";
 import { db } from "@/db";
 import { subscriptions, youtubeChannels, youtubeVideos } from "@/db/schema";
-import { eq, and, desc, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, isNotNull } from "drizzle-orm";
 import { router } from "@/server/trpc/init";
 
 async function getPreferredOrgSubscription(organizationId: string) {
@@ -47,7 +47,7 @@ async function createFreeSubscriptionForOrg(
     })
     .onConflictDoNothing({
       target: subscriptions.organizationId,
-      where: sql`${subscriptions.organizationId} IS NOT NULL`,
+      where: isNotNull(subscriptions.organizationId),
     })
     .returning();
 

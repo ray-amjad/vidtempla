@@ -23,6 +23,19 @@ VidTempla is a YouTube description management tool built with Next.js 15, TypeSc
 ## Deployment
 Vercel's `vercel-build` script runs `drizzle-kit migrate && next build` on every deploy. Migrations are version-controlled SQL files applied sequentially — no prompts, no silent failures.
 
+## Drizzle Query Patterns
+**Always prefer the typed query builder over raw `sql\`\``.** Drizzle's tagged-template `sql` does not apply column type encoders to interpolated values, so a JS `Date` becomes `Tue Jun 02 2026 00:00:45 GMT+0000` and breaks `timestamptz` comparisons (production outage 2026-06-02 in `upsertCredits`).
+
+Use these operators instead — all already imported across the codebase:
+- Comparison: `eq, ne, lt, lte, gt, gte, isNull, isNotNull, inArray, like, between`
+- Logical: `and, or, not`
+- Ordering: `asc, desc`
+- Updates: `.update(t).set({col: value}).where(...).returning(...)`
+
+Raw `sql\`\`` is acceptable **only** when Drizzle has no equivalent: `CASE WHEN`, `SELECT 1 ... FOR UPDATE` row locks, `pg_advisory_*` locks, `SET LOCAL`, arithmetic in SET (`col + 1`), `DATE(col)` grouping, `nulls last`/`nulls first` ordering.
+
+When raw `sql\`\`` is unavoidable and you must interpolate a value, wrap the comparison with a typed operator inside the tag so encoders still run: `sql\`CASE WHEN ${eq(col, dateValue)} THEN ... END\``.
+
 # Authentication & Security
 - Better Auth handles auth via `nextjs/src/lib/auth.ts` (server) and `nextjs/src/lib/auth-client.ts` (client)
 - User isolation enforced in tRPC procedures via WHERE clauses (no RLS)
