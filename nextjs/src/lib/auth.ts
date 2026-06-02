@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { magicLink, mcp, organization } from "better-auth/plugins";
-import { sql } from "drizzle-orm";
+import { isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 import { subscriptions, userCredits, member as memberTable } from "@/db/schema";
@@ -69,7 +69,7 @@ export const auth = betterAuth({
               })
               .onConflictDoNothing({
                 target: subscriptions.organizationId,
-                where: sql`${subscriptions.organizationId} IS NOT NULL`,
+                where: isNotNull(subscriptions.organizationId),
               });
 
             // Create credit allocation for the org

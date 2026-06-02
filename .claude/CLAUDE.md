@@ -1,77 +1,105 @@
-# Project Overview
-VidTempla is a YouTube description management tool built with Next.js 15, TypeScript, PlanetScale Postgres, Drizzle ORM, Better Auth, and tRPC.
+# CLAUDE.md
 
-# Tech Stack & Architecture
-- **Frontend**: Next.js 15, React 18, TypeScript
-- **Styling**: Tailwind CSS, Radix UI components
-- **Backend**: tRPC for type-safe APIs, Next.js API routes
-- **Database**: PlanetScale Postgres with Drizzle ORM
-- **Authentication**: Better Auth (magic link + Google OAuth)
-- **Background Jobs**: Inngest for scheduled tasks
-- **Payments**: Stripe
-- **Type Safety**: Full TypeScript with end-to-end type safety via Drizzle + tRPC
+VidTempla is a YouTube description management tool: a Next.js 15 dashboard for humans and a REST API for AI agents that proxies YouTube on-demand.
 
-# Database Workflow (Drizzle ORM)
+## Project map
 
-## Schema Changes
-1. Edit `nextjs/src/db/schema.ts` to modify table definitions
-2. Run `npx drizzle-kit generate` (from `nextjs/`) to create a SQL migration file in `drizzle/`
-3. Review the generated SQL, then commit it alongside your schema changes
-4. For custom SQL (triggers, functions): run `npx drizzle-kit generate --custom` to create a blank migration file
-5. **Never run `drizzle-kit push`** — it prompts interactively and silently fails in CI
+- `nextjs/` — Next.js 15 app (run all commands from here)
+  - `src/app/` — App Router pages; REST endpoints under `src/app/api/v1/`
+  - `src/server/` — tRPC routers and init (`api/routers/`, `trpc/`)
+  - `src/db/schema.ts` — Drizzle schema (source of truth for DB types)
+  - `src/lib/` — domain services (`auth.ts`, `plan-limits.ts`, `services/`, `api-auth.ts`, `api-keys.ts`)
+  - `src/workflows/` — Inngest workflows (`sync-channel-videos`, `credit-reset`, …)
+  - `drizzle/` — generated SQL migrations (commit alongside schema changes)
+- `tasks/` — Kanban folders (`to-do/` → `doing/` → `done/`)
+- `scripts/` — repo-level helpers
 
-## Deployment
-Vercel's `vercel-build` script runs `drizzle-kit migrate && next build` on every deploy. Migrations are version-controlled SQL files applied sequentially — no prompts, no silent failures.
+Stack: Next.js 15, React 18, TypeScript, Tailwind + Radix, tRPC, Drizzle ORM on PlanetScale Postgres, Better Auth (magic link + Google), Inngest, Stripe.
 
-# Authentication & Security
-- Better Auth handles auth via `nextjs/src/lib/auth.ts` (server) and `nextjs/src/lib/auth-client.ts` (client)
-- User isolation enforced in tRPC procedures via WHERE clauses (no RLS)
-- Middleware checks `better-auth.session_token` cookie for protected routes
-- Never expose sensitive data in client-side code
+<important if="you need to run commands to build, test, lint, or generate code">
 
-## Type Safety
-- Use TypeScript for all code
-- Schema types come from Drizzle (`nextjs/src/db/schema.ts`)
-- Use tRPC for end-to-end type safety
-- Avoid `any` type - use proper TypeScript types
+Run from `nextjs/`.
 
-# Security Considerations
-- **This is a public GitHub repository.** Never commit secrets, API keys, passwords, database URLs, or any sensitive credentials. Always use environment variables and ensure `.env.local` is gitignored. Before committing, review staged changes for anything that could expose sensitive information.
-- User isolation via tRPC WHERE clauses (no database-level RLS)
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the Next.js dev server |
+| `npm run build` | `next build` |
+| `npm run vercel-build` | `drizzle-kit migrate && next build` (what Vercel runs) |
+| `npm run start` | Start the production server |
+| `npm run lint` | `next lint` |
+| `npm run test:org-guards` | Check YouTube router org guards |
+| `npm run test:encryption` | Encryption smoke test |
+| `npx drizzle-kit generate` | Generate SQL migration from schema changes |
+| `npx drizzle-kit generate --custom` | Blank migration file for custom SQL (triggers, functions) |
+| `npx drizzle-kit migrate` | Apply pending migrations |
+| `npx tsc --noEmit -p .` | Typecheck the whole app |
 
-# Long-Term Vision
-VidTempla is an API-first platform where AI agents securely manage YouTube channels. The dashboard serves humans; the REST API serves agents. Instead of storing YouTube data, the API proxies YouTube's APIs on-demand so agents get real-time data while VidTempla handles OAuth complexity.
+</important>
 
-# REST API Architecture (`/api/v1/`)
+<important if="you are editing `nextjs/src/db/schema.ts` or otherwise changing the database schema">
 
-## Design Principles
-- Response envelope: `{ data, error, meta }` — never bare arrays
-- Error format: `{ code, message, suggestion, status }` — always include `suggestion` so agents can self-correct
-- Cursor-based pagination on all list endpoints (`?cursor=...&limit=50`)
-- Field selection on proxy endpoints (`?fields=id,title,viewCount`)
-- camelCase JSON, kebab-case URLs
-- Every proxy endpoint documents its YouTube API quota cost
+1. Edit `nextjs/src/db/schema.ts`.
+2. Run `npx drizzle-kit generate` from `nextjs/` to create a SQL migration in `drizzle/`.
+3. Review the generated SQL and commit it alongside the schema change.
+4. For triggers/functions/custom DDL: `npx drizzle-kit generate --custom` for a blank migration.
+5. **Never run `drizzle-kit push`** — prompts interactively and silently fails in CI.
 
-## Key Files
-- `nextjs/src/lib/api-auth.ts` — `withApiKey()` middleware, `apiSuccess()`, `apiError()`, `logRequest()`
-- `nextjs/src/lib/api-keys.ts` — `generateApiKey()`, `hashApiKey()`
-- `nextjs/src/app/api/v1/` — all REST endpoints (see `CLAUDE.md` in that directory)
-- `nextjs/src/db/schema.ts` — `apiKeys` and `apiRequestLog` tables
+Vercel's `vercel-build` runs `drizzle-kit migrate && next build` on every deploy, so migrations apply automatically once merged.
 
-## Endpoint Groups
-- **Channels**: list, details, overview, sync, analytics, search
-- **Videos**: list, details, analytics, retention, assign, variables
-- **Templates**: CRUD + impact analysis
-- **Containers**: CRUD
-- **YouTube Management**: playlists, comments, thumbnails, captions (proxy)
-- **Analytics**: flexible YouTube Analytics API queries
-- **Usage**: API request tracking and quota monitoring
+</important>
 
-## Adding New Endpoints
-Follow the `withApiKey` pattern in `nextjs/src/lib/api-auth.ts`. See `nextjs/src/app/api/v1/CLAUDE.md` for the full guide.
+<important if="you are writing a database query — selecting, inserting, updating, deleting, or filtering rows">
 
-# Task Board
-Work is tracked in `tasks/` using a Kanban folder structure (`to-do/` → `doing/` → `done/`). See `tasks/CLAUDE.md` for the full workflow. Move task files between folders as you pick up and complete work.
+**Prefer the typed query builder over raw `sql\`\``.** Drizzle's tagged-template `sql` does NOT apply column type encoders to interpolated values — a JS `Date` becomes `Tue Jun 02 2026 00:00:45 GMT+0000` and breaks `timestamptz` comparisons (production outage 2026-06-02 in `upsertCredits`).
 
-# Vercel Deployment Verification
-After every commit pushed to main, check the Vercel deployment status using the Vercel MCP tools (`list_deployments` with projectId `prj_8JcHH2ynheBrW2pc2KTUMdTEbvNQ` and teamId `team_EnX8JK9URpU5sW8LFtwVLgoz`). Confirm the deployment reaches **READY** state before considering the task complete. If it shows **ERROR**, fetch the build logs and diagnose the failure.
+Use these operators — already imported across the codebase:
+- Comparison: `eq, ne, lt, lte, gt, gte, isNull, isNotNull, inArray, like, between`
+- Logical: `and, or, not`
+- Ordering: `asc, desc`
+
+Raw `sql\`\`` is acceptable **only** when Drizzle has no equivalent: `CASE WHEN`, `SELECT 1 ... FOR UPDATE` row locks, `pg_advisory_*` locks, `SET LOCAL`, arithmetic in `SET` (`col + 1`), `DATE(col)` grouping, `nulls last`/`nulls first` ordering.
+
+If raw `sql\`\`` is unavoidable and you must interpolate a value, wrap the comparison in a typed operator so encoders still run: `sql\`CASE WHEN ${eq(col, dateValue)} THEN ... END\``.
+
+</important>
+
+<important if="you are about to commit, stage files, or run `git add`">
+
+This is a **public GitHub repository**. Never commit secrets, API keys, passwords, or database URLs. `.env.local` is gitignored — keep it that way. Review staged diffs for credentials before every commit.
+
+</important>
+
+<important if="you are touching authentication, sessions, middleware, or anything that protects user data">
+
+- Better Auth lives in `nextjs/src/lib/auth.ts` (server) and `nextjs/src/lib/auth-client.ts` (client).
+- Middleware checks the `better-auth.session_token` cookie for protected routes.
+- User isolation is enforced in tRPC procedures via `WHERE` clauses — there is no database-level RLS. Every query that returns user-owned rows must filter by `userId` or `organizationId`.
+- Never expose secrets, tokens, or internal IDs in client-side code.
+
+</important>
+
+<important if="you are adding or modifying a REST endpoint under `nextjs/src/app/api/v1/`">
+
+Conventions enforced by `withApiKey()` in `nextjs/src/lib/api-auth.ts`:
+- Response envelope: `{ data, error, meta }` — never bare arrays.
+- Error format: `{ code, message, suggestion, status }` — always include `suggestion` so agents can self-correct.
+- Cursor-based pagination on lists (`?cursor=...&limit=50`).
+- Field selection on proxy endpoints (`?fields=id,title,viewCount`).
+- camelCase JSON, kebab-case URLs.
+- Document YouTube quota cost on every proxy endpoint.
+
+Key files: `src/lib/api-auth.ts` (`withApiKey`, `apiSuccess`, `apiError`, `logRequest`), `src/lib/api-keys.ts` (`generateApiKey`, `hashApiKey`), `src/db/schema.ts` (`apiKeys`, `apiRequestLog`). See `nextjs/src/app/api/v1/CLAUDE.md` for the full guide.
+
+</important>
+
+<important if="you are picking up new work, finishing a task, or organizing what to do next">
+
+Work lives in `tasks/` as a Kanban folder structure: `to-do/` → `doing/` → `done/`. Move the task file between folders as you pick it up and finish it. See `tasks/CLAUDE.md` for the workflow.
+
+</important>
+
+<important if="you have just pushed to main, deployed to Vercel, or were asked to confirm a deploy is healthy">
+
+Verify the Vercel deployment reaches **READY** via `list_deployments` (projectId `prj_8JcHH2ynheBrW2pc2KTUMdTEbvNQ`, teamId `team_EnX8JK9URpU5sW8LFtwVLgoz`) before marking work complete. If it shows **ERROR**, fetch the build logs and diagnose before doing anything else.
+
+</important>

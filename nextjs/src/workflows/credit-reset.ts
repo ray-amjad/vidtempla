@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { userCredits } from "@/db/schema";
-import { sql } from "drizzle-orm";
+import { lte } from "drizzle-orm";
 import { getUserPlanTier, upsertCredits } from "@/lib/plan-limits";
 import { PLAN_CONFIG } from "@/lib/stripe";
 
@@ -16,7 +16,7 @@ async function resetExpiredCredits() {
   const expiredRows = await db
     .select({ organizationId: userCredits.organizationId, userId: userCredits.userId })
     .from(userCredits)
-    .where(sql`${userCredits.periodEnd} <= NOW()`);
+    .where(lte(userCredits.periodEnd, new Date()));
 
   for (const row of expiredRows) {
     const orgId = row.organizationId ?? row.userId;

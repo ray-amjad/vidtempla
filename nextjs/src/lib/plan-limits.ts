@@ -179,48 +179,64 @@ export async function consumeCredits(
 ): Promise<{ success: boolean; remaining: number }> {
   if (quotaUnits <= 0) return { success: true, remaining: Infinity };
 
-  // Check if period has expired and replenish if needed
-  const [currentRow] = await defaultDb
-    .select({ id: userCredits.id, periodEnd: userCredits.periodEnd })
-    .from(userCredits)
-    .where(eq(userCredits.organizationId, organizationId));
+  try {
+    // Check if period has expired and replenish if needed
+    const [currentRow] = await defaultDb
+      .select({ id: userCredits.id, periodEnd: userCredits.periodEnd })
+      .from(userCredits)
+      .where(eq(userCredits.organizationId, organizationId));
 
-  if (currentRow && currentRow.periodEnd <= new Date()) {
-    const planTier = await getUserPlanTier(organizationId, defaultDb);
-    const allocation = PLAN_CONFIG[planTier].monthlyCredits;
-    const now = new Date();
-    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    await upsertCredits(organizationId, allocation, now, periodEnd);
-  }
+    if (currentRow && currentRow.periodEnd <= new Date()) {
+      const planTier = await getUserPlanTier(organizationId, defaultDb);
+      const allocation = PLAN_CONFIG[planTier].monthlyCredits;
+      const now = new Date();
+      const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await upsertCredits(organizationId, allocation, now, periodEnd);
+    }
 
-  // Try atomic decrement
-  const rows = await defaultDb.execute<{ balance: number }>(
-    sql`UPDATE user_credits SET balance = balance - ${quotaUnits}, updated_at = NOW() WHERE organization_id = ${organizationId} AND balance >= ${quotaUnits} RETURNING balance`
-  );
-
-  if (rows.length > 0) {
-    return { success: true, remaining: rows[0]!.balance };
-  }
-
-  // No row — lazy provision
-  if (!currentRow) {
-    const planTier = await getUserPlanTier(organizationId, defaultDb);
-    const allocation = PLAN_CONFIG[planTier].monthlyCredits;
-    const now = new Date();
-    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    await upsertCredits(organizationId, allocation, now, periodEnd);
-
-    const retryRows = await defaultDb.execute<{ balance: number }>(
+    // Try atomic decrement
+    const rows = await defaultDb.execute<{ balance: number }>(
       sql`UPDATE user_credits SET balance = balance - ${quotaUnits}, updated_at = NOW() WHERE organization_id = ${organizationId} AND balance >= ${quotaUnits} RETURNING balance`
     );
-    if (retryRows.length > 0) {
-      return { success: true, remaining: retryRows[0]!.balance };
-    }
-    return { success: false, remaining: 0 };
-  }
 
-  // Row exists but insufficient balance
-  return { success: false, remaining: 0 };
+    if (rows.length > 0) {
+      return { success: true, remaining: rows[0]!.balance };
+    }
+
+    // No row — lazy provision
+    if (!currentRow) {
+      const planTier = await getUserPlanTier(organizationId, defaultDb);
+      const allocation = PLAN_CONFIG[planTier].monthlyCredits;
+      const now = new Date();
+      const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      await upsertCredits(organizationId, allocation, now, periodEnd);
+
+      const retryRows = await defaultDb.execute<{ balance: number }>(
+        sql`UPDATE user_credits SET balance = balance - ${quotaUnits}, updated_at = NOW() WHERE organization_id = ${organizationId} AND balance >= ${quotaUnits} RETURNING balance`
+      );
+      if (retryRows.length > 0) {
+        return { success: true, remaining: retryRows[0]!.balance };
+      }
+      return { success: false, remaining: 0 };
+    }
+
+    // Row exists but insufficient balance
+    return { success: false, remaining: 0 };
+  } catch (err) {
+    // Fail open: surface the underlying cause and allow the request through so a
+    // metering bug never takes down API/MCP access. Drizzle wraps the postgres
+    // error in DrizzleQueryError; .cause carries the real PostgresError.
+    const cause = (err as { cause?: unknown })?.cause;
+    console.error("[consumeCredits] DB error — failing open", {
+      organizationId,
+      quotaUnits,
+      error: err instanceof Error ? err.message : String(err),
+      cause: cause instanceof Error
+        ? { message: cause.message, ...(cause as unknown as Record<string, unknown>) }
+        : cause,
+    });
+    return { success: true, remaining: Infinity };
+  }
 }
 
 /**
@@ -278,6 +294,12 @@ export async function upsertCredits(organizationId: string, allocation: number, 
     }
   }
 
+  // Cast the Date to an ISO string with an explicit ::timestamptz. Drizzle's
+  // tagged `sql` template does not apply column type encoders to interpolated
+  // values, so passing a Date directly serializes it as JS .toString()
+  // ("Tue Jun 02 2026 00:00:45 GMT+0000"), which Postgres cannot cast to
+  // timestamptz — the upsert then fails for every credit reset/consume.
+  const periodStartIso = periodStart.toISOString();
   await defaultDb.insert(userCredits).values({
     organizationId, userId: resolvedUserId, balance: allocation, monthlyAllocation: allocation, periodStart, periodEnd,
   }).onConflictDoUpdate({
@@ -285,7 +307,7 @@ export async function upsertCredits(organizationId: string, allocation: number, 
     set: {
       // Only reset balance to allocation when the period rolls over (periodStart changes).
       // Mid-period updates (card change, proration, metadata edit) preserve consumed credits.
-      balance: sql`CASE WHEN ${userCredits.periodStart} = ${periodStart} THEN ${userCredits.balance} ELSE ${allocation} END`,
+      balance: sql`CASE WHEN ${userCredits.periodStart} = ${periodStartIso}::timestamptz THEN ${userCredits.balance} ELSE ${allocation} END`,
       monthlyAllocation: allocation,
       periodStart,
       periodEnd,

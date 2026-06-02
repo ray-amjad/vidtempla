@@ -5,7 +5,7 @@ import {
   youtubeVideos,
   descriptionHistory,
 } from "@/db/schema";
-import { eq, and, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { eq, and, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { decrypt, encrypt } from "@/utils/encryption";
 import {
   isYouTubeInvalidGrantError,
@@ -376,7 +376,7 @@ async function syncClaimedChannelVideos(
             eq(youtubeVideos.videoId, video.videoId),
             eq(youtubeVideos.channelId, channelId),
             eq(youtubeVideos.renderVersion, video.renderVersion),
-            sql`${youtubeVideos.updatedAt} < ${deleteUpdatedBefore}`,
+            lt(youtubeVideos.updatedAt, deleteUpdatedBefore),
             sql`(${youtubeVideos.descriptionPushReservedUntil} is null or ${youtubeVideos.descriptionPushReservedUntil} <= now())`
           )
         )
@@ -401,7 +401,7 @@ async function syncClaimedChannelVideos(
       .where(
         and(
           eq(youtubeChannels.id, channelId),
-          sql`${youtubeChannels.driftBaselinedAt} IS NULL`
+          isNull(youtubeChannels.driftBaselinedAt)
         )
       );
   }
