@@ -24,6 +24,17 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
       to,
       subject,
       html,
+      // Disable SendGrid click/open tracking + the unsubscribe footer for
+      // 1:1 transactional mail. ct.sendgrid.net link rewriting is a bulk-mail
+      // classifier signal at Gmail/Outlook, and the visible/hover URL mismatch
+      // reads as phishing — both hurt inbox placement for magic links + org
+      // invites. Every caller of sendEmail today is transactional; if a bulk
+      // path is added later, override via an explicit option.
+      trackingSettings: {
+        clickTracking: { enable: false, enableText: false },
+        openTracking: { enable: false },
+        subscriptionTracking: { enable: false },
+      },
     });
   } catch (err) {
     logSendGridError(emailType, to, err);
