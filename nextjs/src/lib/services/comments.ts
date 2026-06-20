@@ -2,6 +2,7 @@ import { getChannelTokens, getAnyUserToken } from "@/lib/api-auth";
 import {
   listCommentThreads as ytListCommentThreads,
   replyToComment as ytReplyToComment,
+  updateComment as ytUpdateComment,
   deleteComment as ytDeleteComment,
   resolveChannelId,
 } from "@/lib/clients/youtube";
@@ -70,6 +71,28 @@ export async function replyToComment(
     return { data: comment };
   } catch {
     return { error: { code: "INTERNAL_ERROR", message: "Failed to reply to comment", suggestion: "Try again later", status: 500 } };
+  }
+}
+
+// ── update_comment ───────────────────────────────────────────
+
+export async function updateComment(
+  channelId: string,
+  commentId: string,
+  text: string,
+  userId: string,
+  organizationId?: string
+): Promise<ServiceResult<unknown>> {
+  try {
+    const tokens = await getChannelTokens(channelId, userId, organizationId);
+    if ("error" in tokens) {
+      return { error: { code: tokens.error.error.code, message: tokens.error.error.message, suggestion: tokens.error.error.suggestion ?? "", status: tokens.status } };
+    }
+
+    const comment = await ytUpdateComment(tokens.accessToken, commentId, text);
+    return { data: comment };
+  } catch {
+    return { error: { code: "INTERNAL_ERROR", message: "Failed to update comment", suggestion: "Try again later", status: 500 } };
   }
 }
 

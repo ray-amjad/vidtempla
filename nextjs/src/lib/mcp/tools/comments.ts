@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { toMcp, mcpQuotaExceeded, getSessionUserId, getSessionOrgId, logMcpRequest, READ, WRITE, DESTRUCTIVE } from "../helpers";
 import { consumeCredits } from "@/lib/plan-limits";
-import { listCommentThreads, replyToComment, deleteComment } from "@/lib/services/comments";
+import { listCommentThreads, replyToComment, updateComment, deleteComment } from "@/lib/services/comments";
 
 export function registerCommentTools(server: McpServer) {
   server.tool(
@@ -43,6 +43,26 @@ export function registerCommentTools(server: McpServer) {
       if (!credits.success) return mcpQuotaExceeded(userId, "reply_to_comment");
       const result = await replyToComment(channelId, parentId, text, userId, orgId);
       logMcpRequest(userId, "reply_to_comment", 50, "error" in result ? 400 : 200);
+      return toMcp(result);
+    }
+  );
+
+  server.tool(
+    "update_comment",
+    "Edit the text of a YouTube comment you authored (e.g. a pinned comment). Editing keeps a pinned comment pinned. You can only edit comments your connected channel wrote.",
+    {
+      channelId: z.string().describe("YouTube channel ID that authored the comment (the channel to act as)"),
+      commentId: z.string().describe("The comment ID to edit (from list_comment_threads results — use the topLevelComment id for a pinned comment)"),
+      text: z.string().describe("New comment text (supports YouTube markdown: *bold*, _italic_)"),
+    },
+    WRITE,
+    async ({ channelId, commentId, text }) => {
+      const userId = getSessionUserId();
+      const orgId = getSessionOrgId();
+      const credits = await consumeCredits(orgId, 50);
+      if (!credits.success) return mcpQuotaExceeded(userId, "update_comment");
+      const result = await updateComment(channelId, commentId, text, userId, orgId);
+      logMcpRequest(userId, "update_comment", 50, "error" in result ? 400 : 200);
       return toMcp(result);
     }
   );

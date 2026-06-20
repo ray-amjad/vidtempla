@@ -705,6 +705,29 @@ export async function replyToComment(
 }
 
 /**
+ * Updates the text of a comment you authored.
+ * Quota cost: 50 units
+ */
+export async function updateComment(
+  accessToken: string,
+  commentId: string,
+  text: string
+): Promise<YouTubeComment> {
+  const response = await axios.put<YouTubeComment>(
+    `${YOUTUBE_API_BASE}/comments`,
+    { id: commentId, snippet: { textOriginal: text } },
+    {
+      params: { part: 'snippet' },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return response.data;
+}
+
+/**
  * Deletes a comment.
  * Quota cost: 50 units
  */
