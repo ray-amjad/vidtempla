@@ -33,7 +33,7 @@ export function registerCommentTools(server: McpServer) {
     {
       channelId: z.string().describe("YouTube channel ID to reply as"),
       parentId: z.string().describe("The comment ID to reply to (from list_comment_threads results)"),
-      text: z.string().describe("Reply text content (supports YouTube markdown: *bold*, _italic_)"),
+      text: z.string().min(1).describe("Reply text content (supports YouTube markdown: *bold*, _italic_)"),
     },
     WRITE,
     async ({ channelId, parentId, text }) => {
@@ -53,7 +53,7 @@ export function registerCommentTools(server: McpServer) {
     {
       channelId: z.string().describe("YouTube channel ID that authored the comment (the channel to act as)"),
       commentId: z.string().describe("The comment ID to edit (from list_comment_threads results — use the topLevelComment id for a pinned comment)"),
-      text: z.string().describe("New comment text (supports YouTube markdown: *bold*, _italic_)"),
+      text: z.string().min(1).describe("New comment text (supports YouTube markdown: *bold*, _italic_)"),
     },
     WRITE,
     async ({ channelId, commentId, text }) => {

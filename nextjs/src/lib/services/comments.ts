@@ -1,3 +1,4 @@
+import axios from "axios";
 import { getChannelTokens, getAnyUserToken } from "@/lib/api-auth";
 import {
   listCommentThreads as ytListCommentThreads,
@@ -91,7 +92,21 @@ export async function updateComment(
 
     const comment = await ytUpdateComment(tokens.accessToken, commentId, text);
     return { data: comment };
-  } catch {
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response) {
+      const status = error.response.status || 500;
+      const message = error.response.data?.error?.message || error.message;
+      return {
+        error: {
+          code: "YOUTUBE_API_ERROR",
+          message,
+          suggestion: status === 403
+            ? "You can only edit comments authored by the connected channel. Confirm the channelId matches the channel that wrote the comment."
+            : "Check the commentId is valid and try again.",
+          status,
+        },
+      };
+    }
     return { error: { code: "INTERNAL_ERROR", message: "Failed to update comment", suggestion: "Try again later", status: 500 } };
   }
 }
