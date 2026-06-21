@@ -85,7 +85,7 @@ export function isYouTubeQuotaError(error: unknown): boolean {
   // fetchChannelInfo rethrows `new Error('YouTube API error: ' + JSON.stringify(body))`,
   // so the quota signature survives in the message string.
   if (error instanceof Error) {
-    return /quotaExceeded|exceeded your[\s\S]*quota/i.test(error.message);
+    return /quotaExceeded|dailyLimitExceeded|exceeded your[\s\S]*quota/i.test(error.message);
   }
   return false;
 }

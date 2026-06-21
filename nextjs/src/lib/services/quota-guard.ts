@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { appState } from "@/db/schema";
 import { sendQuotaExhaustedEmail } from "@/lib/email/senders/sendQuotaExhaustedEmail";
@@ -48,7 +48,12 @@ function nextPacificMidnight(now: Date): Date {
   const laMidnight = new Date(laNow);
   laMidnight.setHours(24, 0, 0, 0); // next local midnight in laNow's frame
   const msUntilMidnight = laMidnight.getTime() - laNow.getTime();
-  return new Date(now.getTime() + msUntilMidnight);
+  const midnight = new Date(now.getTime() + msUntilMidnight);
+  // `now`'s sub-second component bleeds through the arithmetic above. Zero it so
+  // the instant is identical for every call within the same reset cycle — the
+  // notification dedupe key (derived from this) depends on that stability.
+  midnight.setMilliseconds(0);
+  return midnight;
 }
 
 export async function isYouTubeQuotaExhausted(): Promise<boolean> {
@@ -85,21 +90,26 @@ export async function markYouTubeQuotaExhausted(): Promise<void> {
  */
 async function notifyQuotaExhaustedOnce(until: Date): Promise<void> {
   const target = until.toISOString();
-
-  const [row] = await db
-    .select()
-    .from(appState)
-    .where(eq(appState.key, NOTIFIED_KEY));
-  if (readUntil(row?.value) === target) return; // already alerted this window
-
   const value: UntilValue = { until: target };
-  await db
+
+  // Atomically claim the alert slot for this window. The upsert only writes (and
+  // therefore only RETURNs a row) when the stored `until` differs from the
+  // current target: a fresh insert, or a window that hasn't been alerted yet.
+  // A concurrent caller that already wrote this window's target hits the
+  // setWhere guard, updates nothing, and gets an empty result — so exactly one
+  // racer sends the email. (A SELECT-then-upsert here is not atomic: concurrent
+  // callers both read "no match" and both send.)
+  const claimed = await db
     .insert(appState)
     .values({ key: NOTIFIED_KEY, value, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: appState.key,
       set: { value, updatedAt: new Date() },
-    });
+      setWhere: sql`(${appState.value} ->> 'until') is distinct from ${target}`,
+    })
+    .returning({ key: appState.key });
+
+  if (claimed.length === 0) return; // already alerted this window
 
   try {
     await sendQuotaExhaustedEmail({ resetsAt: until });
