@@ -1,2 +1,5 @@
 .vercel
 .env*.local
+
+# Local-only docs containing personal/sensitive data — never commit (public repo)
+youtube-quota-audit-form.md
