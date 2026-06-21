@@ -9,12 +9,17 @@ import { eq, and, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { decrypt, encrypt } from "@/utils/encryption";
 import {
   isYouTubeInvalidGrantError,
+  isYouTubeQuotaError,
   refreshAccessToken,
   fetchChannelVideos,
   fetchChannelInfo,
   getUploadsPlaylistId,
 } from "@/lib/clients/youtube";
 import { detectAndRecordDrift } from "@/lib/services/drift";
+import {
+  isYouTubeQuotaExhausted,
+  markYouTubeQuotaExhausted,
+} from "@/lib/services/quota-guard";
 
 const DESCRIPTION_PUSH_DELETE_GRACE_MS = 2 * 60 * 1000;
 const SYNC_LOCK_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
@@ -70,6 +75,24 @@ async function runSyncChannelVideos(
   organizationId?: string
 ) {
   "use step";
+
+  // Quota circuit breaker: a sync is a background read and the lowest-priority
+  // consumer. If the quota is already known-exhausted, skip without touching
+  // YouTube so we don't burn the remaining headroom (reserved for user writes).
+  if (await isYouTubeQuotaExhausted()) {
+    console.log(
+      `[sync-channel-videos] YouTube quota exhausted — skipping sync for channel ${channelId}`
+    );
+    return {
+      success: true,
+      skipped: true,
+      reason: "quota_exhausted",
+      channelId,
+      videosProcessed: 0,
+      newVideos: 0,
+      deletedVideos: 0,
+    };
+  }
 
   const syncStartedAt = new Date();
   const deleteUpdatedBefore = new Date(
@@ -139,6 +162,14 @@ async function runSyncChannelVideos(
     );
   } catch (err) {
     await markSyncFailed(channelId, userId, err, organizationId);
+    // Daily quota exhaustion can never succeed on retry — trip the breaker
+    // (which alerts the operator once) and stop the 3x workflow retries.
+    if (isYouTubeQuotaError(err)) {
+      await markYouTubeQuotaExhausted();
+      throw new FatalError(
+        "YouTube Data API daily quota exhausted — not retrying until reset"
+      );
+    }
     throw err;
   }
 }

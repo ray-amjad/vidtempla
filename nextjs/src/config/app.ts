@@ -9,7 +9,7 @@ export const appConfig = {
   // Basic app information
   name: "VidTempla",
   description: "Manage YouTube video descriptions with dynamic templates",
-  supportEmail: "support@yourdomain.com",
+  supportEmail: "support@vidtempla.com",
 
   // Branding
   brand: {

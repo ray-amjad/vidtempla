@@ -127,6 +127,13 @@
       "when": 1777215000000,
       "tag": "0017_description_push_reservation",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1782009582228,
+      "tag": "0018_flimsy_betty_ross",
+      "breakpoints": true
     }
   ]
 }

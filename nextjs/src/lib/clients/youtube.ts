@@ -48,6 +48,49 @@ export function isYouTubeInvalidGrantError(
 }
 
 /**
+ * Thrown / detected when YouTube returns its *daily* quota exhaustion: HTTP 403
+ * with reason `quotaExceeded`/`dailyLimitExceeded`. This cannot succeed until
+ * the project quota resets at midnight Pacific, so callers should treat it as
+ * terminal (throw `FatalError`) instead of burning the 3x workflow retries.
+ */
+export class YouTubeQuotaExceededError extends Error {
+  constructor() {
+    super('YouTube Data API daily quota exceeded');
+    this.name = 'YouTubeQuotaExceededError';
+    Object.setPrototypeOf(this, YouTubeQuotaExceededError.prototype);
+  }
+}
+
+/**
+ * True only for *daily* quota exhaustion — deliberately NOT for the transient
+ * `userRateLimitExceeded` / `rateLimitExceeded` throttles, which a retry can
+ * clear. Handles both raw AxiosErrors (thrown by most client functions) and the
+ * plain Error that `fetchChannelInfo` wraps the body into.
+ */
+export function isYouTubeQuotaError(error: unknown): boolean {
+  if (error instanceof YouTubeQuotaExceededError) return true;
+
+  if (axios.isAxiosError(error)) {
+    if (error.response?.status !== 403) return false;
+    const data = error.response?.data as
+      | { error?: { message?: string; errors?: Array<{ reason?: string }> } }
+      | undefined;
+    const reasons = data?.error?.errors?.map((e) => e.reason) ?? [];
+    if (reasons.includes('quotaExceeded') || reasons.includes('dailyLimitExceeded')) {
+      return true;
+    }
+    return /exceeded your[\s\S]*quota/i.test(data?.error?.message ?? '');
+  }
+
+  // fetchChannelInfo rethrows `new Error('YouTube API error: ' + JSON.stringify(body))`,
+  // so the quota signature survives in the message string.
+  if (error instanceof Error) {
+    return /quotaExceeded|dailyLimitExceeded|exceeded your[\s\S]*quota/i.test(error.message);
+  }
+  return false;
+}
+
+/**
  * Custom type for OAuth 2.0 token response
  * Matches Google's standard OAuth token format
  */

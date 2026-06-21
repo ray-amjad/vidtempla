@@ -1,7 +1,7 @@
 import sgMail from "@sendgrid/mail";
 import { logSendGridError } from "./logSendGridError";
 
-export type EmailType = "magic_link" | "org_invite";
+export type EmailType = "magic_link" | "org_invite" | "workflow_failure";
 
 interface SendEmailOptions {
   to: string;

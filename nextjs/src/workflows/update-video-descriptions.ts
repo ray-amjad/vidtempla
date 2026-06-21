@@ -1,10 +1,13 @@
+import { FatalError } from "workflow";
 import { db } from "@/db";
 import { youtubeVideos, descriptionHistory } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import {
   getChannelAccessToken,
+  isYouTubeQuotaError,
   updateVideoDescription,
 } from "@/lib/clients/youtube";
+import { markYouTubeQuotaExhausted } from "@/lib/services/quota-guard";
 
 const DESCRIPTION_PUSH_RESERVATION_MS = 2 * 60 * 1000;
 
@@ -49,9 +52,11 @@ async function runUpdateVideoDescription(payload: PushPayload) {
   const preCheckRows = await db.execute(sql<{
     renderVersion: number;
     driftDetectedAt: Date | null;
+    currentDescription: string | null;
   }>`
     select render_version as "renderVersion",
-           drift_detected_at as "driftDetectedAt"
+           drift_detected_at as "driftDetectedAt",
+           current_description as "currentDescription"
     from youtube_videos
     where id = ${videoId}
   `);
@@ -78,6 +83,14 @@ async function runUpdateVideoDescription(payload: PushPayload) {
       videoId,
       driftDetectedAt: preCheck.driftDetectedAt,
     });
+  } else if (String(preCheck.currentDescription ?? "").replace(/\s+$/, "") === canonical) {
+    // No drift and YouTube already holds this exact description (currentDescription
+    // mirrors YouTube after our last push/sync). Skip the 50-unit videos.update —
+    // the single biggest avoidable quota cost.
+    console.log("[update-video-descriptions] description already current — skipping no-op YouTube write", {
+      videoId,
+    });
+    return { success: true, videoId, noop: true };
   }
 
   // Phase 2a: reserve this render with a short CAS before the external PUT.
@@ -125,6 +138,15 @@ async function runUpdateVideoDescription(payload: PushPayload) {
           eq(youtubeVideos.renderVersion, claimedRenderVersion)
         )
       );
+    // Daily quota exhaustion can never succeed on retry — trip the breaker
+    // (alerts the operator once) and stop the 3x workflow retries. The
+    // reservation was already restored above, so a post-reset retry is clean.
+    if (isYouTubeQuotaError(err)) {
+      await markYouTubeQuotaExhausted();
+      throw new FatalError(
+        "YouTube Data API daily quota exhausted — not retrying until reset"
+      );
+    }
     throw err;
   }
 
