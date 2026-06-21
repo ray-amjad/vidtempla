@@ -1123,6 +1123,40 @@ async function buildPushPayload(
   };
 }
 
+// Max in-flight DB transactions / workflow enqueues when fanning out a push.
+// Keeps us well under the connection-pool ceiling while collapsing the serial
+// per-video latency that made large template edits block the save request.
+const PUSH_CONCURRENCY = 10;
+
+/**
+ * Map `items` through `fn` with at most `limit` promises in flight at once,
+ * preserving input order in the result. A worker-pool (not chunked batches),
+ * so a slow item doesn't stall the whole batch.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]!);
+    }
+  };
+
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+
+  return results;
+}
+
 export async function pushVideoDescriptions(
   videoIds: string[],
   userId: string,
@@ -1146,17 +1180,19 @@ export async function pushVideoDescriptions(
     };
   }
 
-  const payloads: PushPayload[] = [];
-  for (const videoId of videoIds) {
-    const payload = await db.transaction(async (tx) =>
-      buildPushPayload(tx, videoId, userId)
-    );
-    if (payload) payloads.push(payload);
-  }
+  // Build payloads and enqueue workflows with bounded concurrency. Doing this
+  // serially is O(n) request-blocking round-trips: a template change touching
+  // ~200 videos hung the save for ~20s. Each buildPushPayload runs in its own
+  // transaction (FOR UPDATE locks distinct rows) and each payload is
+  // self-contained, so there's no cross-video ordering to preserve.
+  const built = await mapWithConcurrency(videoIds, PUSH_CONCURRENCY, (videoId) =>
+    db.transaction(async (tx) => buildPushPayload(tx, videoId, userId))
+  );
+  const payloads = built.filter((p): p is PushPayload => p !== null);
 
-  for (const payload of payloads) {
-    await start(updateVideoDescriptionsWorkflow, [payload]);
-  }
+  await mapWithConcurrency(payloads, PUSH_CONCURRENCY, (payload) =>
+    start(updateVideoDescriptionsWorkflow, [payload])
+  );
 
   return { data: { success: true } };
 }
