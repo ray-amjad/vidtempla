@@ -15,7 +15,7 @@ import {
   getTableColumns,
   type SQL,
 } from "drizzle-orm";
-import { db } from "@/db";
+import { db, DB_POOL_MAX } from "@/db";
 import {
   youtubeVideos,
   youtubeChannels,
@@ -1124,27 +1124,45 @@ async function buildPushPayload(
 }
 
 // Max in-flight DB transactions / workflow enqueues when fanning out a push.
-// Keeps us well under the connection-pool ceiling while collapsing the serial
-// per-video latency that made large template edits block the save request.
-const PUSH_CONCURRENCY = 10;
+// Derived from the shared pool size with reserved headroom (POOL_RESERVE) so a
+// single large push can never claim every connection and stall other requests
+// in the same process, while still collapsing the serial per-video latency
+// that made large template edits block the save request.
+const PUSH_POOL_RESERVE = 4;
+const PUSH_CONCURRENCY = Math.max(1, DB_POOL_MAX - PUSH_POOL_RESERVE);
+
+type Settled<R> =
+  | { status: "fulfilled"; value: R }
+  | { status: "rejected"; reason: unknown };
 
 /**
  * Map `items` through `fn` with at most `limit` promises in flight at once,
  * preserving input order in the result. A worker-pool (not chunked batches),
  * so a slow item doesn't stall the whole batch.
+ *
+ * Each item is settled independently: a thrown `fn` is captured as a rejected
+ * result rather than rejecting the pool. This keeps an early failure from
+ * abandoning the other in-flight workers mid-commit — every item runs to
+ * completion and every outcome is observable, so a side effect already
+ * committed by one worker (e.g. a bumped `render_version`) is never silently
+ * orphaned by another worker's throw.
  */
-async function mapWithConcurrency<T, R>(
+async function mapWithConcurrencySettled<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+): Promise<Settled<R>[]> {
+  const results: Settled<R>[] = new Array(items.length);
   let next = 0;
 
   const worker = async () => {
     while (next < items.length) {
       const index = next++;
-      results[index] = await fn(items[index]!);
+      try {
+        results[index] = { status: "fulfilled", value: await fn(items[index]!) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
     }
   };
 
@@ -1180,19 +1198,54 @@ export async function pushVideoDescriptions(
     };
   }
 
-  // Build payloads and enqueue workflows with bounded concurrency. Doing this
-  // serially is O(n) request-blocking round-trips: a template change touching
-  // ~200 videos hung the save for ~20s. Each buildPushPayload runs in its own
-  // transaction (FOR UPDATE locks distinct rows) and each payload is
-  // self-contained, so there's no cross-video ordering to preserve.
-  const built = await mapWithConcurrency(videoIds, PUSH_CONCURRENCY, (videoId) =>
-    db.transaction(async (tx) => buildPushPayload(tx, videoId, userId))
+  // Phase 1 — build payloads and bump render_version with bounded concurrency.
+  // Doing this serially is O(n) request-blocking round-trips: a template change
+  // touching ~200 videos hung the save for ~20s. Each buildPushPayload runs in
+  // its own transaction (FOR UPDATE locks distinct rows) and each payload is
+  // self-contained, so there's no cross-video ordering to preserve. Settled so
+  // a single failing video doesn't abandon the other in-flight transactions and
+  // leave their committed render_version bumps without a workflow below.
+  const builtResults = await mapWithConcurrencySettled(
+    videoIds,
+    PUSH_CONCURRENCY,
+    (videoId) => db.transaction(async (tx) => buildPushPayload(tx, videoId, userId))
   );
-  const payloads = built.filter((p): p is PushPayload => p !== null);
 
-  await mapWithConcurrency(payloads, PUSH_CONCURRENCY, (payload) =>
-    start(updateVideoDescriptionsWorkflow, [payload])
+  const payloads: PushPayload[] = [];
+  const errors: unknown[] = [];
+  for (const result of builtResults) {
+    if (result.status === "rejected") errors.push(result.reason);
+    else if (result.value !== null) payloads.push(result.value);
+  }
+
+  // Phase 2 — enqueue a workflow for every payload built above. This always
+  // runs for the successfully-built payloads, even when Phase 1 had failures,
+  // so a committed render_version bump is never left without its corresponding
+  // YouTube-update workflow. Settled for the same reason as Phase 1.
+  const enqueueResults = await mapWithConcurrencySettled(
+    payloads,
+    PUSH_CONCURRENCY,
+    (payload) => start(updateVideoDescriptionsWorkflow, [payload])
   );
+  for (const result of enqueueResults) {
+    if (result.status === "rejected") errors.push(result.reason);
+  }
+
+  if (errors.length > 0) {
+    console.error(
+      `pushVideoDescriptions: ${errors.length} of ${videoIds.length} video(s) failed to push`,
+      errors[0]
+    );
+    return {
+      error: {
+        code: "PUSH_PARTIALLY_FAILED",
+        message: `Failed to push ${errors.length} of ${videoIds.length} video description(s).`,
+        suggestion:
+          "Retry the save. Videos that pushed successfully are already queued for update; retrying re-attempts the ones that failed.",
+        status: 500,
+      },
+    };
+  }
 
   return { data: { success: true } };
 }
