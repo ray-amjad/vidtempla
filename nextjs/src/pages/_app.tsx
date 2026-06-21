@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import Script from "next/script";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import RootLayout from "@/components/layout/RootLayout";
@@ -31,6 +32,16 @@ function App({ Component, pageProps }: AppProps) {
           <Toaster />
         </div>
       </RootLayout>
+
+      {/* AgentStack Widget */}
+      <Script id="agentstack-init" strategy="lazyOnload">
+        {`window.agentstack=new Proxy({_q:[]},{get(t,p){if(p==='_q')return t._q;return(...a)=>t._q.push([p,...a]);}});`}
+      </Script>
+      <Script
+        src="https://www.agentstack.build/embed.js"
+        data-agent-id="xlb0EGyfRIce"
+        strategy="lazyOnload"
+      />
     </PostHogProvider>
   );
 }
