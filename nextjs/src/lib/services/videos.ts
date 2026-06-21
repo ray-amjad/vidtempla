@@ -1232,19 +1232,16 @@ export async function pushVideoDescriptions(
   }
 
   if (errors.length > 0) {
-    console.error(
-      `pushVideoDescriptions: ${errors.length} of ${videoIds.length} video(s) failed to push`,
-      errors[0]
-    );
-    return {
-      error: {
-        code: "PUSH_PARTIALLY_FAILED",
-        message: `Failed to push ${errors.length} of ${videoIds.length} video description(s).`,
-        suggestion:
-          "Retry the save. Videos that pushed successfully are already queued for update; retrying re-attempts the ones that failed.",
-        status: 500,
-      },
-    };
+    // Throw (rather than return an error) to preserve the pre-parallelization
+    // contract: several callers await this only for its side effects and ignore
+    // the ServiceResult (template/container saves, the dashboard mutations), so
+    // a returned error would let them report success while some descriptions
+    // were never queued. Both phases above already drained every built payload,
+    // so each committed render_version bump has its workflow — this throw only
+    // signals the partial failure, it doesn't orphan anything.
+    const detail = `Failed to push ${errors.length} of ${videoIds.length} video description(s)`;
+    console.error(`pushVideoDescriptions: ${detail}`, errors[0]);
+    throw new Error(detail, { cause: errors[0] });
   }
 
   return { data: { success: true } };
