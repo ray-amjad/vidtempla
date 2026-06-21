@@ -231,7 +231,14 @@ export const youtubeVideos = pgTable("youtube_videos", {
   updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
     .notNull()
     .$defaultFn(() => new Date()),
-});
+}, (table) => ({
+  // Created in migration 0017 (custom SQL) but never declared here; backs the
+  // description-push reservation CAS lookups. Declared so drizzle stops trying
+  // to drop it on every generate.
+  channelPushReservationIdx: index(
+    "youtube_videos_channel_push_reservation_idx"
+  ).on(table.channelId, table.descriptionPushReservedUntil),
+}));
 
 export const videoVariables = pgTable(
   "video_variables",
@@ -531,4 +538,16 @@ export const userCredits = pgTable("user_credits", {
   updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
     .notNull()
     .defaultNow(),
+});
+
+// Global (non-user-scoped) key/value state. Backs the YouTube quota circuit
+// breaker (`youtube_quota_exhausted_until`) and its alert-email dedup
+// (`youtube_quota_notified_for`) so a quota wipeout is recorded once and
+// stops doomed background syncs platform-wide until the quota resets.
+export const appState = pgTable("app_state", {
+  key: text("key").primaryKey(),
+  value: jsonb("value"),
+  updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+    .notNull()
+    .$defaultFn(() => new Date()),
 });
