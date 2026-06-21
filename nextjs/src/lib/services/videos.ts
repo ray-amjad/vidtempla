@@ -1131,6 +1131,43 @@ async function buildPushPayload(
 const PUSH_POOL_RESERVE = 4;
 const PUSH_CONCURRENCY = Math.max(1, DB_POOL_MAX - PUSH_POOL_RESERVE);
 
+/**
+ * Minimal FIFO counting semaphore. Permits handed directly to the next waiter
+ * so the in-flight count never transiently exceeds the limit.
+ */
+class Semaphore {
+  private permits: number;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(permits: number) {
+    this.permits = permits;
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.permits > 0) {
+      this.permits--;
+    } else {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    }
+    try {
+      return await fn();
+    } finally {
+      const next = this.waiters.shift();
+      if (next) next();
+      else this.permits++;
+    }
+  }
+}
+
+// Process-wide ceiling on concurrent push DB transactions. The per-call limiter
+// below bounds a single push, but two template/container saves running at once
+// would each open up to PUSH_CONCURRENCY transactions — 2x over the pool. This
+// semaphore is shared across every pushVideoDescriptions call in the process
+// (matching the per-process Postgres pool), so total in-flight push
+// transactions never exceed PUSH_CONCURRENCY no matter how many saves overlap,
+// always leaving PUSH_POOL_RESERVE connections for unrelated requests.
+const pushTxnSemaphore = new Semaphore(PUSH_CONCURRENCY);
+
 type Settled<R> =
   | { status: "fulfilled"; value: R }
   | { status: "rejected"; reason: unknown };
@@ -1208,7 +1245,10 @@ export async function pushVideoDescriptions(
   const builtResults = await mapWithConcurrencySettled(
     videoIds,
     PUSH_CONCURRENCY,
-    (videoId) => db.transaction(async (tx) => buildPushPayload(tx, videoId, userId))
+    (videoId) =>
+      pushTxnSemaphore.run(() =>
+        db.transaction(async (tx) => buildPushPayload(tx, videoId, userId))
+      )
   );
 
   const payloads: PushPayload[] = [];
