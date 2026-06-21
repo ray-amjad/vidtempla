@@ -65,7 +65,12 @@ If raw `sql\`\`` is unavoidable and you must interpolate a value, wrap the compa
 
 <important if="you are about to commit, stage files, or run `git add`">
 
-This is a **public GitHub repository**. Never commit secrets, API keys, passwords, or database URLs. `.env.local` is gitignored — keep it that way. Review staged diffs for credentials before every commit.
+This is a **public GitHub repository**. Never commit sensitive data of any kind:
+- **Secrets:** API keys, passwords, tokens, database/connection URLs. `.env.local` is gitignored — keep it that way.
+- **Personal/identifying data (PII):** legal names, home/registered addresses, personal emails, phone numbers, company registration numbers, Google Cloud project IDs/numbers, OAuth client IDs.
+- **Generated working docs** that bundle the above (e.g. compliance/audit forms, quota-request drafts). Keep these local and add them to `.gitignore` (see `youtube-quota-audit-form.md`).
+
+When staging, add files **explicitly by path** — never `git add -A`/`git add .` blindly. Review the staged diff for the items above before every commit; if a file mixes useful content with PII/secrets, gitignore it rather than committing.
 
 </important>
 
