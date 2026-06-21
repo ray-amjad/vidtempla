@@ -101,21 +101,24 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2"
   },
-  "overrides": {
-    "@better-auth/core": "$better-auth",
-    "@protobufjs/utf8": "1.1.1",
-    "basic-ftp": "5.3.1",
-    "brace-expansion": "5.0.6",
-    "express-rate-limit": "8.5.2",
-    "fast-uri": "3.1.2",
-    "fast-xml-builder": "1.2.0",
-    "hono": "4.12.18",
-    "ip-address": "10.2.0",
-    "kysely": "0.28.17",
-    "protobufjs": "7.5.8",
-    "zod": "4.3.6"
+  "pnpm": {
+    "overrides": {
+      "@better-auth/core": "$better-auth",
+      "@protobufjs/utf8": "1.1.1",
+      "basic-ftp": "5.3.1",
+      "brace-expansion": "5.0.6",
+      "express-rate-limit": "8.5.2",
+      "fast-uri": "3.1.2",
+      "fast-xml-builder": "1.2.0",
+      "hono": "4.12.18",
+      "ip-address": "10.2.0",
+      "kysely": "0.28.17",
+      "protobufjs": "7.5.8",
+      "zod": "4.3.6"
+    }
   },
   "ct3aMetadata": {
     "initVersion": "7.4.0"
-  }
+  },
+  "packageManager": "pnpm@10.33.0"
 }
