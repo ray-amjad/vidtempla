@@ -46,6 +46,7 @@ import { start } from "workflow/api";
 import { updateVideoDescriptionsWorkflow, type PushPayload } from "@/workflows/update-video-descriptions";
 import type { ServiceResult, PaginationMeta } from "./types";
 import { assertNoDrift, detectAndRecordDrift } from "./drift";
+import { isYouTubeQuotaExhausted } from "./quota-guard";
 import {
   decodeCompositeCursor,
   encodeCompositeCursor,
@@ -310,7 +311,11 @@ export async function listVideos(
           Date.now() - ownedChannel.lastSyncedAt.getTime() > LIST_VIDEOS_SYNC_STALE_MS;
         const syncIdle = ownedChannel.syncStatus === "idle";
 
-        if (stale && syncIdle) {
+        // Respect the quota circuit breaker on this inline refresh too: during
+        // an active quota window every fetchChannelVideos call is a doomed 403,
+        // so skip the sync (and don't even claim the lock) and serve cached DB
+        // data — same short-circuit the background workflow path applies.
+        if (stale && syncIdle && !(await isYouTubeQuotaExhausted())) {
           const lockAcquired = await tryAcquireListVideosSyncLock(
             ownedChannel.id
           );
