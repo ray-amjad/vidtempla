@@ -36,24 +36,68 @@ function readUntil(value: unknown): string | null {
   return null;
 }
 
+const PACIFIC_TZ = "America/Los_Angeles";
+
+/** Offset (zone wall-clock minus UTC) in ms for `date` in `timeZone`. */
+function zoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const f: Record<string, number> = {};
+  for (const p of parts) if (p.type !== "literal") f[p.type] = Number(p.value);
+  const asUtc = Date.UTC(
+    f.year!,
+    f.month! - 1,
+    f.day!,
+    f.hour! === 24 ? 0 : f.hour!,
+    f.minute!,
+    f.second!
+  );
+  return asUtc - date.getTime();
+}
+
 /**
  * Next midnight Pacific as a UTC instant, DST-correct, without a tz library.
- * Computes the wall-clock duration from `now` to the next Los Angeles midnight
- * and adds it to `now` — timezone-independent of the server's own clock.
+ * Finds the Los Angeles calendar day for `now`, advances to the next day, and
+ * resolves that day's 00:00 wall-clock to a UTC instant using the zone offset
+ * *at that instant*. Re-checking the offset once settles DST-transition days
+ * (e.g. the 25-hour "fall back" day), where a wall-clock-duration approach
+ * would land an hour early and clear the breaker before quota actually resets.
+ * Midnight always exists and is unambiguous in LA (transitions happen at 02:00),
+ * so no skipped/ambiguous-hour handling is needed. The instant is whole-second
+ * by construction, keeping the notification dedupe key stable across a cycle.
  */
 function nextPacificMidnight(now: Date): Date {
-  const laNow = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" })
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PACIFIC_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const p: Record<string, number> = {};
+  for (const part of dateParts)
+    if (part.type !== "literal") p[part.type] = Number(part.value);
+
+  // Next LA calendar day (UTC date math handles month/year rollover).
+  const nextDay = new Date(Date.UTC(p.year!, p.month! - 1, p.day! + 1));
+  const guess = Date.UTC(
+    nextDay.getUTCFullYear(),
+    nextDay.getUTCMonth(),
+    nextDay.getUTCDate()
   );
-  const laMidnight = new Date(laNow);
-  laMidnight.setHours(24, 0, 0, 0); // next local midnight in laNow's frame
-  const msUntilMidnight = laMidnight.getTime() - laNow.getTime();
-  const midnight = new Date(now.getTime() + msUntilMidnight);
-  // `now`'s sub-second component bleeds through the arithmetic above. Zero it so
-  // the instant is identical for every call within the same reset cycle — the
-  // notification dedupe key (derived from this) depends on that stability.
-  midnight.setMilliseconds(0);
-  return midnight;
+
+  // Treat the target wall-clock as UTC, correct by the offset, then re-correct
+  // once in case a DST transition sits between the guess and the result.
+  let result = guess - zoneOffsetMs(new Date(guess), PACIFIC_TZ);
+  result = guess - zoneOffsetMs(new Date(result), PACIFIC_TZ);
+  return new Date(result);
 }
 
 export async function isYouTubeQuotaExhausted(): Promise<boolean> {

@@ -13,10 +13,15 @@ export async function sendQuotaExhaustedEmail({
   resetsAt,
 }: SendQuotaExhaustedEmailParams): Promise<void> {
   const subject = "⚠ VidTempla: YouTube API daily quota exhausted";
+  // Explicit field options, not dateStyle/timeStyle: the latter throw
+  // "TypeError: Invalid option" when combined with timeZoneName in Node.
   const resetStr = resetsAt.toLocaleString("en-US", {
     timeZone: "America/Los_Angeles",
-    dateStyle: "medium",
-    timeStyle: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZoneName: "short",
   });
 
