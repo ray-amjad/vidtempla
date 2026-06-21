@@ -15,15 +15,19 @@ export async function sendQuotaExhaustedEmail({
   const subject = "⚠ VidTempla: YouTube API daily quota exhausted";
   // Explicit field options, not dateStyle/timeStyle: the latter throw
   // "TypeError: Invalid option" when combined with timeZoneName in Node.
-  const resetStr = resetsAt.toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  });
+  const formatIn = (timeZone: string) =>
+    resetsAt.toLocaleString("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  const resetPacific = formatIn("America/Los_Angeles");
+  const resetTokyo = formatIn("Asia/Tokyo");
+  const resetGmt = formatIn("UTC");
 
   const bodyHtml = `
     <h1 style="color:${BRAND_COLOR};margin-top:0;margin-bottom:16px;font-size:24px;">YouTube quota exhausted</h1>
@@ -33,7 +37,10 @@ export async function sendQuotaExhaustedEmail({
     </p>
     <div style="${CARD_STYLE}">
       <p style="margin:0;color:#4b5563;font-size:15px;">
-        <strong>Quota resets (approx):</strong><br/>${resetStr}
+        <strong>Quota resets (approx):</strong><br/>
+        ${resetPacific}<br/>
+        ${resetTokyo}<br/>
+        ${resetGmt}
       </p>
     </div>
     <p style="margin:16px 0;color:#4b5563;font-size:15px;">
