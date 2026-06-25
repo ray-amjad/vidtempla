@@ -84,13 +84,18 @@ export default function VideosTab() {
   const retryPushMutation = api.dashboard.youtube.videos.retryPush.useMutation();
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
-  // Live refresh while any video has a push in flight (queued/updating) or a
-  // retry pending, so the badges clear one-by-one as each completes. Depend on
-  // the derived boolean — not the `videos` array — so the 15s interval is armed
-  // once and stays stable, instead of being torn down and recreated on every
-  // poll (each refetch returns a fresh array reference).
+  // Live refresh only while a push is genuinely in flight (queued/updating) —
+  // those states clear within seconds/minutes, so a 15s poll makes the badges
+  // disappear one-by-one as each completes. Deliberately NOT for retry_scheduled
+  // (hours-long backoff; the countdown is approximate) or failed (terminal —
+  // can't change without the explicit Retry now), so we never leave a permanent
+  // 15s background poll running. Depend on the derived boolean — not the
+  // `videos` array — so the interval is armed once and stays stable instead of
+  // being torn down and recreated on every refetch (fresh array reference).
   const hasActivePush =
-    videos?.some((video) => video.pushStatus && video.pushStatus !== 'idle') ?? false;
+    videos?.some(
+      (video) => video.pushStatus === 'queued' || video.pushStatus === 'updating'
+    ) ?? false;
   useEffect(() => {
     if (!hasActivePush) return;
 

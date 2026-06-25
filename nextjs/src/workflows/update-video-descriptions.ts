@@ -142,6 +142,53 @@ async function runUpdateVideoDescription(payload: PushPayload) {
   const claimedRenderVersion = Number(claimRows[0]?.renderVersion ?? 0);
 
   if (!claimedRenderVersion) {
+    // The claim can fail for three reasons; only one of them is genuinely stale:
+    //   1. the row was deleted,
+    //   2. a newer push bumped render_version (that push now owns the status), or
+    //   3. our render is still current but an *active reservation* left behind by
+    //      a sibling attempt that crashed/timed out before clearing it is blocking
+    //      us — the dev-kit's quick retries all land inside the 2-min window.
+    // In case 3 the row is stuck at queued/updating with no live workflow, so we
+    // must hand it to the cron rather than return stale-success and abandon it.
+    // No attempt is consumed — this isn't a YouTube failure.
+    const [current] = await db
+      .select({
+        renderVersion: youtubeVideos.renderVersion,
+        reservedUntil: youtubeVideos.descriptionPushReservedUntil,
+      })
+      .from(youtubeVideos)
+      .where(eq(youtubeVideos.id, videoId));
+
+    if (
+      current &&
+      Number(current.renderVersion) === renderVersion &&
+      current.reservedUntil &&
+      current.reservedUntil.getTime() > Date.now()
+    ) {
+      // Schedule just past the blocking reservation's expiry so the cron's next
+      // pass can actually claim it. Guarded on render_version so a concurrent
+      // newer push is never clobbered.
+      await db
+        .update(youtubeVideos)
+        .set({
+          pushStatus: "retry_scheduled",
+          nextRetryAt: new Date(current.reservedUntil.getTime() + 60 * 1000),
+          lastPushError: "reservation held by a previous attempt",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(youtubeVideos.id, videoId),
+            eq(youtubeVideos.renderVersion, renderVersion)
+          )
+        );
+      console.warn(
+        "[update-video-descriptions] claim blocked by an active reservation — handed to retry cron",
+        { videoId, renderVersion }
+      );
+      return { success: true, videoId, retryScheduled: true };
+    }
+
     console.warn(
       "[update-video-descriptions] CAS claim failed before YouTube PUT — skipping side effect",
       { videoId, renderVersion }
