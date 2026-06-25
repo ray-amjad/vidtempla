@@ -236,9 +236,9 @@ export const youtubeRouter = router({
             .select({ id: youtubeVideos.id })
             .from(youtubeVideos)
             .innerJoin(containers, eq(youtubeVideos.containerId, containers.id))
-            .where(and(eq(containers.id, input.id), eq(containers.organizationId, ctx.organizationId)))
-            // Newest-first so the most relevant videos enqueue (and start) first.
-            .orderBy(desc(youtubeVideos.publishedAt), desc(youtubeVideos.createdAt));
+            .where(and(eq(containers.id, input.id), eq(containers.organizationId, ctx.organizationId)));
+          // Newest-first enqueue ordering is applied centrally in
+          // pushVideoDescriptions, so no ORDER BY is needed here.
           videoIdsToPush = videos.map((v) => v.id);
 
           if (videoIdsToPush.length > 0) {
@@ -378,9 +378,9 @@ export const youtubeRouter = router({
             const videos = await db
               .select({ id: youtubeVideos.id })
               .from(youtubeVideos)
-              .where(inArray(youtubeVideos.containerId, containerIds))
-              // Newest-first so the most relevant videos enqueue (and start) first.
-              .orderBy(desc(youtubeVideos.publishedAt), desc(youtubeVideos.createdAt));
+              .where(inArray(youtubeVideos.containerId, containerIds));
+            // Newest-first enqueue ordering is applied centrally in
+            // pushVideoDescriptions, so no ORDER BY is needed here.
             videoIdsToPush = videos.map((v) => v.id);
 
             if (videoIdsToPush.length > 0) {

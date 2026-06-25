@@ -85,18 +85,20 @@ export default function VideosTab() {
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
   // Live refresh while any video has a push in flight (queued/updating) or a
-  // retry pending, so the badges clear one-by-one as each completes.
+  // retry pending, so the badges clear one-by-one as each completes. Depend on
+  // the derived boolean — not the `videos` array — so the 15s interval is armed
+  // once and stays stable, instead of being torn down and recreated on every
+  // poll (each refetch returns a fresh array reference).
+  const hasActivePush =
+    videos?.some((video) => video.pushStatus && video.pushStatus !== 'idle') ?? false;
   useEffect(() => {
-    const hasActivePush = videos?.some(
-      (video) => video.pushStatus && video.pushStatus !== 'idle'
-    );
     if (!hasActivePush) return;
 
     const interval = setInterval(() => {
       refetch();
     }, 15000);
     return () => clearInterval(interval);
-  }, [videos, refetch]);
+  }, [hasActivePush, refetch]);
 
   const handleRetryPush = async (video: VideoWithRelations) => {
     setRetryingId(video.id);

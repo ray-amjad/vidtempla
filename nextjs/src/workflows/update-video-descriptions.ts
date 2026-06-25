@@ -15,11 +15,12 @@ import {
 const DESCRIPTION_PUSH_RESERVATION_MS = 2 * 60 * 1000;
 
 // Long-backoff schedule for non-quota lasting failures, indexed by attempt
-// number (1st retry → 3h, 2nd → 6h, 3rd would be terminal). Measured from each
-// failure. Quota-blocked retries reschedule to the known reset and do NOT
-// consume an attempt, so this budget is reserved for genuine post-reset errors.
+// number: the 1st lasting failure schedules a retry +3h later, the 2nd +6h, the
+// 3rd +12h; only after that 3rd (12h) retry also fails is the video marked
+// terminally failed. Measured from each failure. Quota-blocked retries reschedule
+// to the known reset and do NOT consume an attempt, so this budget is reserved
+// for genuine post-reset errors.
 const RETRY_BACKOFF_MS = [3, 6, 12].map((h) => h * 60 * 60 * 1000);
-const MAX_PUSH_ATTEMPTS = RETRY_BACKOFF_MS.length;
 
 export interface PushPayload {
   videoId: string;
@@ -350,7 +351,9 @@ async function recordLastingPushFailure(
   }
 
   const attempts = Number(incremented[0]!.attempts);
-  const terminal = attempts >= MAX_PUSH_ATTEMPTS;
+  // attempts 1→3h, 2→6h, 3→12h; the 4th lasting failure (no backoff slot left)
+  // is terminal. Using `>` (not `>=`) is what keeps the final 12h retry alive.
+  const terminal = attempts > RETRY_BACKOFF_MS.length;
   await db
     .update(youtubeVideos)
     .set({

@@ -55,8 +55,50 @@ async function loadDueRetries() {
 async function enqueueRetry(videoId: string, userId: string) {
   "use step";
 
-  // No force: re-render the current desired state but still respect the drift
-  // gate, so a YouTube edit made between the failure and this retry is never
-  // silently overwritten (the user resolves the drift first).
-  await pushVideoDescriptions([videoId], userId);
+  try {
+    // No force: re-render the current desired state but still respect the drift
+    // gate, so a YouTube edit made between the failure and this retry is never
+    // silently overwritten (the user resolves the drift first).
+    const result = await pushVideoDescriptions([videoId], userId);
+    if ("error" in result) {
+      // The only returned (non-thrown) error is VIDEO_HAS_DRIFT: the user edited
+      // this video on YouTube, so re-pushing on the same schedule would loop
+      // forever and never resolve. Terminalize it so the cron stops re-selecting
+      // it and the user sees why — they resolve the drift, then use "Retry now".
+      // (A successful or no-op push already moved the row off retry_scheduled in
+      // buildPushPayload, so we only ever terminalize rows still pending retry.)
+      await markRetryTerminal(videoId, result.error.message);
+    }
+  } catch (err) {
+    // Unexpected throw (e.g. a workflow-enqueue infra hiccup). pushVideoDescriptions
+    // already reschedules any half-enqueued video to retry next hour, so just log
+    // and move on — one bad video must not abort the rest of this serial batch,
+    // and a transient error must not be mistaken for a terminal failure.
+    console.error("[retry-failed-pushes] retry enqueue failed — will retry next run", {
+      videoId,
+      err,
+    });
+  }
+}
+
+/**
+ * Mark a still-pending retry as terminally failed so the hourly cron stops
+ * re-selecting it. Guarded on `retry_scheduled` so a concurrent push that has
+ * since moved the row to queued/updating/idle is never clobbered.
+ */
+async function markRetryTerminal(videoId: string, message: string) {
+  await db
+    .update(youtubeVideos)
+    .set({
+      pushStatus: "failed",
+      nextRetryAt: null,
+      lastPushError: message.slice(0, 500),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(youtubeVideos.id, videoId),
+        eq(youtubeVideos.pushStatus, "retry_scheduled")
+      )
+    );
 }
