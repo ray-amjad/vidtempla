@@ -221,6 +221,20 @@ export const youtubeVideos = pgTable("youtube_videos", {
     mode: "date",
     withTimezone: true,
   }),
+  // User-visible per-video push state: idle | queued | updating | retry_scheduled
+  // | failed. `idle` means nothing in flight / already synced (renders no badge).
+  // Broader than descriptionPushReservedUntil (a 2-min CAS lock), which it does
+  // not replace — that still backs the reservation; this drives the UI + retries.
+  pushStatus: text("push_status").notNull().default("idle"),
+  // Counts non-quota lasting failures only. Quota-blocked retries reschedule to
+  // the known quota reset without consuming an attempt, so the 3/6/12h backoff
+  // budget is reserved for genuine post-reset failures.
+  pushAttempts: integer("push_attempts").notNull().default(0),
+  nextRetryAt: timestamp("next_retry_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  lastPushError: text("last_push_error"),
   publishedAt: timestamp("published_at", {
     mode: "date",
     withTimezone: true,

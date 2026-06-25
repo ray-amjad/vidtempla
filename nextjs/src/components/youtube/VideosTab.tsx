@@ -3,7 +3,7 @@
  * Manage videos and assign to containers
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '@/utils/api';
 import type { RouterOutputs } from '@/utils/api';
 import { Button } from '@/components/ui/button';
@@ -39,13 +39,20 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Loader2, Play, Edit, History, AlertTriangle } from 'lucide-react';
+import { Loader2, Play, Edit, History, AlertTriangle, RotateCw } from 'lucide-react';
 import EditVariablesSheet from './EditVariablesSheet';
 import HistoryDrawer from './HistoryDrawer';
 
 type VideoWithRelations = RouterOutputs['dashboard']['youtube']['videos']['list'][number];
 
 type DriftFilter = 'all' | 'drifted' | 'clean';
+
+/** Whole hours from now until `when`, floored at 1 (so we never show "0h"). */
+function hoursUntil(when: string | Date | null): number {
+  if (!when) return 1;
+  const ms = (when instanceof Date ? when : new Date(when)).getTime() - Date.now();
+  return Math.max(1, Math.ceil(ms / (60 * 60 * 1000)));
+}
 
 export default function VideosTab() {
   const { toast } = useToast();
@@ -74,6 +81,49 @@ export default function VideosTab() {
   };
   const { data: videos, isLoading, refetch } = api.dashboard.youtube.videos.list.useQuery(apiFilters);
   const assignMutation = api.dashboard.youtube.videos.assignToContainer.useMutation();
+  const retryPushMutation = api.dashboard.youtube.videos.retryPush.useMutation();
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  // Live refresh only while a push is genuinely in flight (queued/updating) —
+  // those states clear within seconds/minutes, so a 15s poll makes the badges
+  // disappear one-by-one as each completes. Deliberately NOT for retry_scheduled
+  // (hours-long backoff; the countdown is approximate) or failed (terminal —
+  // can't change without the explicit Retry now), so we never leave a permanent
+  // 15s background poll running. Depend on the derived boolean — not the
+  // `videos` array — so the interval is armed once and stays stable instead of
+  // being torn down and recreated on every refetch (fresh array reference).
+  const hasActivePush =
+    videos?.some(
+      (video) => video.pushStatus === 'queued' || video.pushStatus === 'updating'
+    ) ?? false;
+  useEffect(() => {
+    if (!hasActivePush) return;
+
+    const interval = setInterval(() => {
+      refetch();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [hasActivePush, refetch]);
+
+  const handleRetryPush = async (video: VideoWithRelations) => {
+    setRetryingId(video.id);
+    try {
+      await retryPushMutation.mutateAsync({ videoId: video.id });
+      toast({
+        title: 'Retrying update',
+        description: 'The description push has been re-queued.',
+      });
+      refetch();
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to retry update',
+        variant: 'destructive',
+      });
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   const handleAssign = async () => {
     if (!selectedVideo || !selectedContainerId) return;
@@ -274,6 +324,65 @@ export default function VideosTab() {
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
+                        )}
+                        {(video.pushStatus === 'queued' ||
+                          video.pushStatus === 'updating') && (
+                          <Badge
+                            variant="outline"
+                            className="w-fit border-primary/40 bg-primary/10 text-primary"
+                          >
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Updating…
+                          </Badge>
+                        )}
+                        {video.pushStatus === 'retry_scheduled' && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="outline"
+                                  className="w-fit border-amber-600/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                                >
+                                  Retrying in {hoursUntil(video.nextRetryAt)}h
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {video.lastPushError ?? 'Update failed — a retry is scheduled.'}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                        {video.pushStatus === 'failed' && (
+                          <div className="flex items-center gap-2">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge variant="destructive" className="w-fit">
+                                    <AlertTriangle className="h-3 w-3 mr-1" />
+                                    Update failed
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {video.lastPushError ??
+                                    'The description push failed after multiple retries.'}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-xs"
+                              disabled={retryingId === video.id}
+                              onClick={() => handleRetryPush(video)}
+                            >
+                              {retryingId === video.id ? (
+                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              ) : (
+                                <RotateCw className="h-3 w-3 mr-1" />
+                              )}
+                              Retry now
+                            </Button>
+                          </div>
                         )}
                       </div>
                     </TableCell>

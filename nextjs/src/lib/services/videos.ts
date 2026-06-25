@@ -1056,7 +1056,24 @@ async function buildPushPayload(
   const video = rows[0];
   if (!video) return null;
 
+  // When there's nothing to push (no container/templates, or the description
+  // already matches), clear any stale non-idle status so a row left at
+  // 'failed'/'retry_scheduled'/'queued' by an earlier attempt doesn't stick
+  // forever (e.g. a manual "Retry now" or hourly cron retry on an already-synced
+  // video). Guarded on `<> 'idle'` so the common no-op case writes nothing.
+  const resetIdleIfStale = () =>
+    tx.execute(sql`
+      update youtube_videos
+      set push_status = 'idle',
+          push_attempts = 0,
+          next_retry_at = null,
+          last_push_error = null,
+          updated_at = now()
+      where id = ${videoId} and push_status <> 'idle'
+    `);
+
   if (!video.container || !video.container.templateOrder?.length) {
+    await resetIdleIfStale();
     return null;
   }
 
@@ -1075,7 +1092,10 @@ async function buildPushPayload(
         .from(templates)
         .where(inArray(templates.id, video.container.templateOrder));
 
-  if (templatesList.length === 0) return null;
+  if (templatesList.length === 0) {
+    await resetIdleIfStale();
+    return null;
+  }
 
   const orderedTemplates = video.container.templateOrder
     .map((templateId: string) =>
@@ -1102,14 +1122,20 @@ async function buildPushPayload(
   );
 
   if (newDescription === video.currentDescription) {
+    await resetIdleIfStale();
     return null;
   }
 
+  // Flip to the user-visible "queued" state in the same locked txn that bumps
+  // render_version, so every affected video shows Updating… the instant the
+  // user confirms. Clear any prior failure so a stale Failed badge can't linger.
   const bumpedRows = await tx.execute(sql<{
     renderVersion: number;
   }>`
     update youtube_videos
     set render_version = render_version + 1,
+        push_status = 'queued',
+        last_push_error = null,
         updated_at = now()
     where id = ${videoId}
     returning render_version as "renderVersion"
@@ -1240,6 +1266,20 @@ export async function pushVideoDescriptions(
     };
   }
 
+  // Order newest-first (publishedAt desc, then createdAt for the nullable tie)
+  // for EVERY caller — not just the ones that remembered to sort — so a future
+  // push entry point can't silently regress to oldest-first. Only worth a query
+  // when there's more than one video; single-video paths (retries) skip it.
+  let orderedVideoIds = videoIds;
+  if (videoIds.length > 1) {
+    const ordered = await db
+      .select({ id: youtubeVideos.id })
+      .from(youtubeVideos)
+      .where(inArray(youtubeVideos.id, videoIds))
+      .orderBy(desc(youtubeVideos.publishedAt), desc(youtubeVideos.createdAt));
+    orderedVideoIds = ordered.map((row) => row.id);
+  }
+
   // Phase 1 — build payloads and bump render_version with bounded concurrency.
   // Doing this serially is O(n) request-blocking round-trips: a template change
   // touching ~200 videos hung the save for ~20s. Each buildPushPayload runs in
@@ -1248,7 +1288,7 @@ export async function pushVideoDescriptions(
   // a single failing video doesn't abandon the other in-flight transactions and
   // leave their committed render_version bumps without a workflow below.
   const builtResults = await mapWithConcurrencySettled(
-    videoIds,
+    orderedVideoIds,
     PUSH_CONCURRENCY,
     (videoId) =>
       pushTxnSemaphore.run(() =>
@@ -1272,8 +1312,31 @@ export async function pushVideoDescriptions(
     PUSH_CONCURRENCY,
     (payload) => start(updateVideoDescriptionsWorkflow, [payload])
   );
-  for (const result of enqueueResults) {
-    if (result.status === "rejected") errors.push(result.reason);
+  for (let i = 0; i < enqueueResults.length; i++) {
+    const result = enqueueResults[i]!;
+    if (result.status === "rejected") {
+      errors.push(result.reason);
+      // The render_version bump + 'queued' flip already committed for this
+      // payload, but no workflow will run to clear it — leaving a permanent
+      // "Updating…" spinner. Hand the video to the hourly retry cron instead by
+      // marking it retry_scheduled with an immediate due time. Guarded on
+      // render_version so a newer push that has since superseded it is untouched.
+      const payload = payloads[i]!;
+      await db
+        .update(youtubeVideos)
+        .set({
+          pushStatus: "retry_scheduled",
+          nextRetryAt: new Date(),
+          lastPushError: "failed to enqueue update",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(youtubeVideos.id, payload.videoId),
+            eq(youtubeVideos.renderVersion, payload.renderVersion)
+          )
+        );
+    }
   }
 
   if (errors.length > 0) {

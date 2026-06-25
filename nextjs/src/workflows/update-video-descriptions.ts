@@ -1,4 +1,3 @@
-import { FatalError } from "workflow";
 import { db } from "@/db";
 import { youtubeVideos, descriptionHistory } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
@@ -7,9 +6,21 @@ import {
   isYouTubeQuotaError,
   updateVideoDescription,
 } from "@/lib/clients/youtube";
-import { markYouTubeQuotaExhausted } from "@/lib/services/quota-guard";
+import {
+  isYouTubeQuotaExhausted,
+  markYouTubeQuotaExhausted,
+  nextQuotaResetAt,
+} from "@/lib/services/quota-guard";
 
 const DESCRIPTION_PUSH_RESERVATION_MS = 2 * 60 * 1000;
+
+// Long-backoff schedule for non-quota lasting failures, indexed by attempt
+// number: the 1st lasting failure schedules a retry +3h later, the 2nd +6h, the
+// 3rd +12h; only after that 3rd (12h) retry also fails is the video marked
+// terminally failed. Measured from each failure. Quota-blocked retries reschedule
+// to the known reset and do NOT consume an attempt, so this budget is reserved
+// for genuine post-reset errors.
+const RETRY_BACKOFF_MS = [3, 6, 12].map((h) => h * 60 * 60 * 1000);
 
 export interface PushPayload {
   videoId: string;
@@ -25,7 +36,19 @@ export interface PushPayload {
 export async function updateVideoDescriptionsWorkflow(payload: PushPayload) {
   "use workflow";
 
-  return await runUpdateVideoDescription(payload);
+  try {
+    return await runUpdateVideoDescription(payload);
+  } catch (err) {
+    // A lasting non-quota failure: the step already exhausted its built-in quick
+    // retries (transient blips resolve there and never reach this catch), so now
+    // we consume a long-backoff attempt (3h → 6h → 12h) or mark terminally
+    // failed after the 3rd. Quota failures are handled inside the step without
+    // throwing, so they never land here and never burn an attempt.
+    const message =
+      err instanceof Error ? err.message : String(err ?? "unknown error");
+    await recordLastingPushFailure(payload.videoId, payload.renderVersion, message);
+    return { success: true, videoId: payload.videoId, retryScheduled: true };
+  }
 }
 
 async function runUpdateVideoDescription(payload: PushPayload) {
@@ -75,6 +98,10 @@ async function runUpdateVideoDescription(payload: PushPayload) {
       payloadRenderVersion: renderVersion,
       currentRenderVersion: Number(preCheck.renderVersion),
     });
+    // A newer push superseded this one and owns the current status. Guard the
+    // idle reset on the payload's render_version so we never clobber the newer
+    // push's queued/updating state.
+    await resetPushStatusIdle(videoId, renderVersion);
     return { success: true, videoId, stale: true };
   }
 
@@ -90,6 +117,7 @@ async function runUpdateVideoDescription(payload: PushPayload) {
     console.log("[update-video-descriptions] description already current — skipping no-op YouTube write", {
       videoId,
     });
+    await resetPushStatusIdle(videoId, renderVersion);
     return { success: true, videoId, noop: true };
   }
 
@@ -99,6 +127,7 @@ async function runUpdateVideoDescription(payload: PushPayload) {
     .update(youtubeVideos)
     .set({
       descriptionPushReservedUntil: reservationExpiresAt,
+      pushStatus: "updating",
       updatedAt: new Date(),
     })
     .where(
@@ -113,11 +142,71 @@ async function runUpdateVideoDescription(payload: PushPayload) {
   const claimedRenderVersion = Number(claimRows[0]?.renderVersion ?? 0);
 
   if (!claimedRenderVersion) {
+    // The claim can fail for three reasons; only one of them is genuinely stale:
+    //   1. the row was deleted,
+    //   2. a newer push bumped render_version (that push now owns the status), or
+    //   3. our render is still current but an *active reservation* left behind by
+    //      a sibling attempt that crashed/timed out before clearing it is blocking
+    //      us — the dev-kit's quick retries all land inside the 2-min window.
+    // In case 3 the row is stuck at queued/updating with no live workflow, so we
+    // must hand it to the cron rather than return stale-success and abandon it.
+    // No attempt is consumed — this isn't a YouTube failure.
+    const [current] = await db
+      .select({
+        renderVersion: youtubeVideos.renderVersion,
+        reservedUntil: youtubeVideos.descriptionPushReservedUntil,
+      })
+      .from(youtubeVideos)
+      .where(eq(youtubeVideos.id, videoId));
+
+    if (
+      current &&
+      Number(current.renderVersion) === renderVersion &&
+      current.reservedUntil &&
+      current.reservedUntil.getTime() > Date.now()
+    ) {
+      // Schedule just past the blocking reservation's expiry so the cron's next
+      // pass can actually claim it. Guarded on render_version so a concurrent
+      // newer push is never clobbered.
+      await db
+        .update(youtubeVideos)
+        .set({
+          pushStatus: "retry_scheduled",
+          nextRetryAt: new Date(current.reservedUntil.getTime() + 60 * 1000),
+          lastPushError: "reservation held by a previous attempt",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(youtubeVideos.id, videoId),
+            eq(youtubeVideos.renderVersion, renderVersion)
+          )
+        );
+      console.warn(
+        "[update-video-descriptions] claim blocked by an active reservation — handed to retry cron",
+        { videoId, renderVersion }
+      );
+      return { success: true, videoId, retryScheduled: true };
+    }
+
     console.warn(
       "[update-video-descriptions] CAS claim failed before YouTube PUT — skipping side effect",
       { videoId, renderVersion }
     );
     return { success: true, videoId, stale: true };
+  }
+
+  // Pre-empt doomed batches: if the quota breaker is already tripped, skip the
+  // PUT entirely (one quota hit would otherwise make all ~232 remaining videos
+  // each fire a doomed 403) and defer to the known reset without consuming an
+  // attempt — same outcome as hitting quota on the PUT, minus the wasted call.
+  if (await isYouTubeQuotaExhausted()) {
+    console.log(
+      "[update-video-descriptions] quota breaker tripped — deferring push to reset",
+      { videoId }
+    );
+    await scheduleQuotaRetry(videoId, claimedRenderVersion);
+    return { success: true, videoId, retryScheduled: true, quotaDeferred: true };
   }
 
   // Phase 2b: external HTTP PUT — performed OUTSIDE any transaction so we never
@@ -138,15 +227,19 @@ async function runUpdateVideoDescription(payload: PushPayload) {
           eq(youtubeVideos.renderVersion, claimedRenderVersion)
         )
       );
-    // Daily quota exhaustion can never succeed on retry — trip the breaker
-    // (alerts the operator once) and stop the 3x workflow retries. The
-    // reservation was already restored above, so a post-reset retry is clean.
+    // Daily quota exhaustion can never succeed before reset — trip the breaker
+    // (alerts the operator once), then defer the push to the known reset WITHOUT
+    // consuming a long-backoff attempt and WITHOUT throwing (so we don't waste
+    // the step's quick retries on an error that can't resolve until midnight).
+    // A video is therefore never marked Failed purely because quota was out.
     if (isYouTubeQuotaError(err)) {
       await markYouTubeQuotaExhausted();
-      throw new FatalError(
-        "YouTube Data API daily quota exhausted — not retrying until reset"
-      );
+      await scheduleQuotaRetry(videoId, claimedRenderVersion);
+      return { success: true, videoId, retryScheduled: true, quotaDeferred: true };
     }
+    // Non-quota error: rethrow so the step's built-in quick retries (3x) get a
+    // chance to resolve a transient blip. Only if all of those are exhausted
+    // does the workflow catch fall through to the long 3h→6h→12h backoff.
     throw err;
   }
 
@@ -164,6 +257,10 @@ async function runUpdateVideoDescription(payload: PushPayload) {
         driftDetectedAt: null,
         renderVersion: sql`${youtubeVideos.renderVersion} + 1`,
         descriptionPushReservedUntil: null,
+        pushStatus: "idle",
+        pushAttempts: 0,
+        nextRetryAt: null,
+        lastPushError: null,
       })
       .where(
         and(
@@ -200,8 +297,124 @@ async function runUpdateVideoDescription(payload: PushPayload) {
       "[update-video-descriptions] CAS failed after YouTube PUT — concurrent writer changed render_version; YouTube has new description but DB write skipped (drift detection will reconcile)",
       { videoId, renderVersion, claimedRenderVersion }
     );
+    // Guarded on claimedRenderVersion, so this no-ops when the concurrent writer
+    // already moved the row on — that newer push owns the visible status.
+    await resetPushStatusIdle(videoId, claimedRenderVersion);
     return { success: true, videoId, stale: true };
   }
 
   return { success: true, videoId };
+}
+
+/**
+ * Clear the user-visible push state back to idle for `videoId`, but only while
+ * its render_version still matches `renderVersionGuard`. The guard makes every
+ * reset path race-safe: if a newer push has since bumped render_version (and set
+ * its own queued/updating state), this update matches no row and leaves the
+ * newer state intact.
+ */
+async function resetPushStatusIdle(
+  videoId: string,
+  renderVersionGuard: number
+): Promise<void> {
+  await db
+    .update(youtubeVideos)
+    .set({
+      pushStatus: "idle",
+      pushAttempts: 0,
+      nextRetryAt: null,
+      lastPushError: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(youtubeVideos.id, videoId),
+        eq(youtubeVideos.renderVersion, renderVersionGuard)
+      )
+    );
+}
+
+/**
+ * Defer a quota-blocked push to the known quota reset without consuming an
+ * attempt. Also restores the short reservation so the cron retry starts clean.
+ */
+async function scheduleQuotaRetry(
+  videoId: string,
+  renderVersionGuard: number
+): Promise<void> {
+  await db
+    .update(youtubeVideos)
+    .set({
+      pushStatus: "retry_scheduled",
+      nextRetryAt: nextQuotaResetAt(),
+      lastPushError: "waiting for quota reset",
+      descriptionPushReservedUntil: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(youtubeVideos.id, videoId),
+        eq(youtubeVideos.renderVersion, renderVersionGuard)
+      )
+    );
+}
+
+/**
+ * Record a lasting (non-quota) failure after the step's quick retries are
+ * exhausted: increment the long-backoff attempt counter and schedule the next
+ * retry (3h → 6h → 12h), or mark terminally failed after the 3rd. Guarded on
+ * render_version so a newer push that has since superseded this one is never
+ * clobbered (the increment matches no row and we bail).
+ *
+ * `"use step"` so the DB writes are durable within the workflow replay — the
+ * workflow body itself must stay side-effect-free.
+ */
+async function recordLastingPushFailure(
+  videoId: string,
+  renderVersionGuard: number,
+  errorMessage: string
+): Promise<void> {
+  "use step";
+
+  const incremented = await db
+    .update(youtubeVideos)
+    .set({
+      pushAttempts: sql`${youtubeVideos.pushAttempts} + 1`,
+      descriptionPushReservedUntil: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(youtubeVideos.id, videoId),
+        eq(youtubeVideos.renderVersion, renderVersionGuard)
+      )
+    )
+    .returning({ attempts: youtubeVideos.pushAttempts });
+
+  if (incremented.length === 0) {
+    // Superseded by a newer push (which owns the visible status now), or the
+    // row is gone. Nothing to record.
+    return;
+  }
+
+  const attempts = Number(incremented[0]!.attempts);
+  // attempts 1→3h, 2→6h, 3→12h; the 4th lasting failure (no backoff slot left)
+  // is terminal. Using `>` (not `>=`) is what keeps the final 12h retry alive.
+  const terminal = attempts > RETRY_BACKOFF_MS.length;
+  await db
+    .update(youtubeVideos)
+    .set({
+      pushStatus: terminal ? "failed" : "retry_scheduled",
+      nextRetryAt: terminal
+        ? null
+        : new Date(Date.now() + RETRY_BACKOFF_MS[attempts - 1]!),
+      lastPushError: errorMessage.slice(0, 500),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(youtubeVideos.id, videoId),
+        eq(youtubeVideos.renderVersion, renderVersionGuard)
+      )
+    );
 }

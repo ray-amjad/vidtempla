@@ -134,6 +134,13 @@
       "when": 1782009582228,
       "tag": "0018_flimsy_betty_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782392847016,
+      "tag": "0019_tiny_nova",
+      "breakpoints": true
     }
   ]
 }
