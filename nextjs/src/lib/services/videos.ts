@@ -1243,6 +1243,30 @@ async function mapWithConcurrencySettled<T, R>(
   return results;
 }
 
+/**
+ * When a workflow enqueue (`start`) fails after buildPushPayload has already
+ * committed render_version+1 and push_status='queued', the row would be stranded
+ * 'queued' with no workflow running and no retry_scheduled row for the cron to
+ * pick up — a permanent "Updating…" spinner. Hand it to the hourly retry cron
+ * instead (guarded on render_version so a newer push is never clobbered).
+ */
+async function rescheduleFailedEnqueue(payload: PushPayload): Promise<void> {
+  await db
+    .update(youtubeVideos)
+    .set({
+      pushStatus: "retry_scheduled",
+      nextRetryAt: new Date(),
+      lastPushError: "failed to enqueue update",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(youtubeVideos.id, payload.videoId),
+        eq(youtubeVideos.renderVersion, payload.renderVersion)
+      )
+    );
+}
+
 export async function pushVideoDescriptions(
   videoIds: string[],
   userId: string,
@@ -1317,25 +1341,8 @@ export async function pushVideoDescriptions(
     if (result.status === "rejected") {
       errors.push(result.reason);
       // The render_version bump + 'queued' flip already committed for this
-      // payload, but no workflow will run to clear it — leaving a permanent
-      // "Updating…" spinner. Hand the video to the hourly retry cron instead by
-      // marking it retry_scheduled with an immediate due time. Guarded on
-      // render_version so a newer push that has since superseded it is untouched.
-      const payload = payloads[i]!;
-      await db
-        .update(youtubeVideos)
-        .set({
-          pushStatus: "retry_scheduled",
-          nextRetryAt: new Date(),
-          lastPushError: "failed to enqueue update",
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(youtubeVideos.id, payload.videoId),
-            eq(youtubeVideos.renderVersion, payload.renderVersion)
-          )
-        );
+      // payload, but no workflow will run to clear it — hand it to the cron.
+      await rescheduleFailedEnqueue(payloads[i]!);
     }
   }
 
@@ -1448,7 +1455,16 @@ export async function updateVideoVariables(
     });
 
     if (payload) {
-      await start(updateVideoDescriptionsWorkflow, [payload]);
+      try {
+        await start(updateVideoDescriptionsWorkflow, [payload]);
+      } catch (enqueueErr) {
+        // buildPushPayload already committed render_version+1 and
+        // push_status='queued'; if the enqueue fails the row would spin
+        // "Updating…" forever (the cron only selects retry_scheduled). Hand it to
+        // the cron, then surface the error to the caller below.
+        await rescheduleFailedEnqueue(payload);
+        throw enqueueErr;
+      }
     }
 
     return { data: { success: true } };
