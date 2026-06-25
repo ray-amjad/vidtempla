@@ -7,6 +7,10 @@
     {
       "path": "/api/workflows/scheduled-sync",
       "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/workflows/retry-failed-pushes",
+      "schedule": "0 * * * *"
     }
   ]
 }

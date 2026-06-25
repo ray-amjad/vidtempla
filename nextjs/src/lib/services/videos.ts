@@ -1105,11 +1105,16 @@ async function buildPushPayload(
     return null;
   }
 
+  // Flip to the user-visible "queued" state in the same locked txn that bumps
+  // render_version, so every affected video shows Updating… the instant the
+  // user confirms. Clear any prior failure so a stale Failed badge can't linger.
   const bumpedRows = await tx.execute(sql<{
     renderVersion: number;
   }>`
     update youtube_videos
     set render_version = render_version + 1,
+        push_status = 'queued',
+        last_push_error = null,
         updated_at = now()
     where id = ${videoId}
     returning render_version as "renderVersion"

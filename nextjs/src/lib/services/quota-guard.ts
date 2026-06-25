@@ -100,6 +100,15 @@ function nextPacificMidnight(now: Date): Date {
   return new Date(result);
 }
 
+/**
+ * The instant the YouTube quota breaker should clear: next Pacific midnight plus
+ * the same cushion `markYouTubeQuotaExhausted()` applies. Used to schedule a
+ * quota-blocked push retry exactly to quota reset (no attempt consumed).
+ */
+export function nextQuotaResetAt(now: Date = new Date()): Date {
+  return new Date(nextPacificMidnight(now).getTime() + RESET_BUFFER_MS);
+}
+
 export async function isYouTubeQuotaExhausted(): Promise<boolean> {
   const [row] = await db
     .select()

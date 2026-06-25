@@ -236,7 +236,9 @@ export const youtubeRouter = router({
             .select({ id: youtubeVideos.id })
             .from(youtubeVideos)
             .innerJoin(containers, eq(youtubeVideos.containerId, containers.id))
-            .where(and(eq(containers.id, input.id), eq(containers.organizationId, ctx.organizationId)));
+            .where(and(eq(containers.id, input.id), eq(containers.organizationId, ctx.organizationId)))
+            // Newest-first so the most relevant videos enqueue (and start) first.
+            .orderBy(desc(youtubeVideos.publishedAt), desc(youtubeVideos.createdAt));
           videoIdsToPush = videos.map((v) => v.id);
 
           if (videoIdsToPush.length > 0) {
@@ -376,7 +378,9 @@ export const youtubeRouter = router({
             const videos = await db
               .select({ id: youtubeVideos.id })
               .from(youtubeVideos)
-              .where(inArray(youtubeVideos.containerId, containerIds));
+              .where(inArray(youtubeVideos.containerId, containerIds))
+              // Newest-first so the most relevant videos enqueue (and start) first.
+              .orderBy(desc(youtubeVideos.publishedAt), desc(youtubeVideos.createdAt));
             videoIdsToPush = videos.map((v) => v.id);
 
             if (videoIdsToPush.length > 0) {
@@ -706,6 +710,27 @@ export const youtubeRouter = router({
           await verifyVideoOwnership(videoId, ctx.organizationId);
         }
         const result = await pushVideoDescriptions(input.videoIds, ctx.user.id, { force: input.force });
+        if ('error' in result) {
+          throwServiceError(result.error);
+        }
+        return result.data;
+      }),
+
+    // Manual "Retry now" for a video whose push failed. Resets the attempt
+    // budget so the retry gets the full 3h→6h→12h schedule again, then
+    // re-enqueues via the normal push path (buildPushPayload flips it back to
+    // queued → Updating…). Respects the drift gate like the other push paths.
+    retryPush: orgProcedure
+      .input(z.object({ videoId: z.string().uuid() }))
+      .mutation(async ({ ctx, input }) => {
+        await verifyVideoOwnership(input.videoId, ctx.organizationId);
+
+        await db
+          .update(youtubeVideos)
+          .set({ pushAttempts: 0, nextRetryAt: null, lastPushError: null })
+          .where(eq(youtubeVideos.id, input.videoId));
+
+        const result = await pushVideoDescriptions([input.videoId], ctx.user.id);
         if ('error' in result) {
           throwServiceError(result.error);
         }
