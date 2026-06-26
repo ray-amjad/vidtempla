@@ -39,7 +39,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Loader2, Play, Edit, History, AlertTriangle } from 'lucide-react';
+import { Spinner } from "@/components/ui/spinner";
+import { Play, Edit, History, AlertTriangle } from 'lucide-react';
 import EditVariablesSheet from './EditVariablesSheet';
 import HistoryDrawer from './HistoryDrawer';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
@@ -223,7 +224,7 @@ export default function VideosTab() {
           {/* Videos List */}
           {isLoading ? (
             <div className="flex justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Spinner className="h-8 w-8 text-muted-foreground" />
             </div>
           ) : !videos || videos.length === 0 ? (
             <div className="text-center py-12">
@@ -373,7 +374,7 @@ export default function VideosTab() {
               <div ref={loadMoreRef} />
               {isFetchingNextPage && (
                 <div className="flex justify-center py-4">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <Spinner className="h-6 w-6 text-muted-foreground" />
                 </div>
               )}
             </>
@@ -417,7 +418,7 @@ export default function VideosTab() {
                   onClick={handleAssign}
                   disabled={!selectedContainerId || assignMutation.isPending}
                 >
-                  {assignMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {assignMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
                   Assign
                 </Button>
               </div>

@@ -31,8 +31,8 @@ import {
   Users,
   Building2,
   ChevronsUpDown,
-  Loader2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Progress } from "./ui/progress";
 import { useRouter } from "next/router";
 import Link from "next/link";
@@ -181,7 +181,7 @@ function OrgSwitcher() {
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
             <Button onClick={handleCreate} disabled={creating || !newOrgName.trim()} className="w-full">
-              {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {creating && <Spinner className="mr-2 h-4 w-4" />}
               Create
             </Button>
           </div>

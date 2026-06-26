@@ -8,7 +8,8 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import { OrganizationProvider } from '@/contexts/OrganizationContext';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Check, Loader2 } from 'lucide-react';
+import { Check } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { api } from '@/utils/api';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -273,7 +274,7 @@ export default function OrgPricingPage() {
                     >
                       {isLoading ? (
                         <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          <Spinner className="mr-2 h-4 w-4" />
                           Processing...
                         </>
                       ) : (

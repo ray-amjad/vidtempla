@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { UserPlus, MoreHorizontal, Trash2, Shield, Crown, Loader2 } from "lucide-react";
+import { UserPlus, MoreHorizontal, Trash2, Shield, Crown } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -158,7 +159,7 @@ function MembersContent() {
                   </SelectContent>
                 </Select>
                 <Button onClick={handleInvite} disabled={inviting || !inviteEmail} className="w-full">
-                  {inviting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {inviting && <Spinner className="mr-2 h-4 w-4" />}
                   Send Invitation
                 </Button>
               </div>
@@ -182,7 +183,7 @@ function MembersContent() {
             </div>
             <div className="flex items-center gap-2">
               {pendingMemberId === m.id && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <Spinner className="h-4 w-4 text-muted-foreground" />
               )}
               <Badge variant={roleBadgeVariant(m.role)} className="gap-1">
                 {roleIcon(m.role)}
@@ -248,7 +249,7 @@ function MembersContent() {
                       onClick={() => handleCancelInvitation(inv.id)}
                     >
                       {cancellingInviteId === inv.id && (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Spinner className="mr-2 h-4 w-4" />
                       )}
                       Cancel
                     </Button>

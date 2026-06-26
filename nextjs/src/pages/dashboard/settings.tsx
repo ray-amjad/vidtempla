@@ -11,7 +11,8 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useUser } from '@/hooks/useUser';
-import { Loader2, ExternalLink } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { api } from '@/utils/api';
 import { toast } from 'sonner';
 import { useRouter } from 'next/router';
@@ -95,7 +96,7 @@ export default function SettingsPage() {
                 <Label htmlFor="email">Email Address</Label>
                 {userLoading ? (
                   <div className="flex items-center gap-2 p-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Spinner className="h-4 w-4" />
                     <span className="text-sm text-muted-foreground">Loading...</span>
                   </div>
                 ) : (
@@ -124,7 +125,7 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               {planLoading ? (
                 <div className="flex items-center gap-2 p-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                   <span className="text-sm text-muted-foreground">Loading plan details...</span>
                 </div>
               ) : (
@@ -202,7 +203,7 @@ export default function SettingsPage() {
                 >
                   {portalLoading ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Spinner className="mr-2 h-4 w-4" />
                       Loading...
                     </>
                   ) : (

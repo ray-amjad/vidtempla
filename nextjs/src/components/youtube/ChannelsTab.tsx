@@ -17,7 +17,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Unplug, RefreshCw, Plus, ArrowUpRight, AlertTriangle, Link2 } from 'lucide-react';
+import { Spinner } from "@/components/ui/spinner";
+import { Unplug, RefreshCw, Plus, ArrowUpRight, AlertTriangle, Link2 } from 'lucide-react';
 import DisconnectConfirmDialog from './DisconnectConfirmDialog';
 import Image from 'next/image';
 import { DateTime } from 'luxon';
@@ -140,7 +141,7 @@ export default function ChannelsTab() {
       <CardContent className="p-0">
         {isLoading ? (
           <div className="flex justify-center py-8">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Spinner className="h-8 w-8 text-muted-foreground" />
           </div>
         ) : !channels || channels.length === 0 ? (
           <div className="text-center py-12">
@@ -252,7 +253,7 @@ export default function ChannelsTab() {
                             disabled={syncingId === channel.id || channel.syncStatus === 'syncing'}
                           >
                             {syncingId === channel.id || channel.syncStatus === 'syncing' ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <Spinner className="h-4 w-4" />
                             ) : (
                               <RefreshCw className="h-4 w-4" />
                             )}
@@ -265,7 +266,7 @@ export default function ChannelsTab() {
                           disabled={deletingId === channel.id}
                         >
                           {deletingId === channel.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <Spinner className="h-4 w-4" />
                           ) : (
                             <Unplug className="h-4 w-4" />
                           )}

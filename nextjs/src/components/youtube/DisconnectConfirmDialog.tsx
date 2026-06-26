@@ -13,7 +13,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
+import { AlertTriangle } from 'lucide-react';
 
 interface DisconnectConfirmDialogProps {
   open: boolean;
@@ -108,7 +109,7 @@ export default function DisconnectConfirmDialog({
           >
             {isDeleting ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="mr-2 h-4 w-4" />
                 Disconnecting...
               </>
             ) : canConfirm ? (

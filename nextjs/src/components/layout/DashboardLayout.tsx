@@ -123,9 +123,14 @@ function DashboardBreadcrumb({
 export default function DashboardLayout({
   children,
   breadcrumbs,
+  title,
+  description,
 }: {
   children: React.ReactNode;
   breadcrumbs?: BreadcrumbItemType[];
+  /** Optional standard page header rendered above the content. */
+  title?: string;
+  description?: string;
 }) {
   return (
     <RootLayout>
@@ -138,6 +143,14 @@ export default function DashboardLayout({
             <DashboardBreadcrumb customBreadcrumbs={breadcrumbs} />
           </header>
           <main className="flex-1 p-4 md:p-8 w-full max-w-7xl mx-auto">
+            {title && (
+              <div className="mb-6 space-y-1">
+                <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+                {description && (
+                  <p className="text-muted-foreground">{description}</p>
+                )}
+              </div>
+            )}
             {children}
           </main>
         </div>

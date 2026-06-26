@@ -13,7 +13,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, ArrowUp, ArrowDown, Check, X, Loader2 } from 'lucide-react';
+import { AlertTriangle, ArrowUp, ArrowDown, Check, X } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import type { PlanTier } from '@/lib/stripe';
 
 interface PlanChangeConfirmDialogProps {
@@ -207,7 +208,7 @@ export default function PlanChangeConfirmDialog({
           >
             {isLoading ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="mr-2 h-4 w-4" />
                 {isUpgrade ? 'Upgrading...' : 'Processing...'}
               </>
             ) : canConfirm ? (

@@ -39,7 +39,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, RotateCcw, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
+import { RotateCcw, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 
 type HistoryVersion = RouterOutputs['dashboard']['youtube']['videos']['getHistory'][number];
 type VideoData = RouterOutputs['dashboard']['youtube']['videos']['get'];
@@ -266,7 +267,7 @@ export default function HistoryDrawer({
                       onClick={() => handleResolveDrift('keep_youtube_edit')}
                       disabled={resolveDriftMutation.isPending}
                     >
-                      {resolveDriftMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      {resolveDriftMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
                       Keep YouTube edit
                     </AlertDialogAction>
                   </AlertDialogFooter>
@@ -289,7 +290,7 @@ export default function HistoryDrawer({
                       onClick={() => handleResolveDrift('reapply_template')}
                       disabled={resolveDriftMutation.isPending}
                     >
-                      {resolveDriftMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      {resolveDriftMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
                       Re-apply template
                     </AlertDialogAction>
                   </AlertDialogFooter>
@@ -300,7 +301,7 @@ export default function HistoryDrawer({
 
           {isLoading ? (
             <div className="flex justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Spinner className="h-8 w-8 text-muted-foreground" />
             </div>
           ) : !history || history.length === 0 ? (
             <div className="text-center py-12">
@@ -399,7 +400,7 @@ export default function HistoryDrawer({
                                 disabled={rollbackMutation.isPending}
                               >
                                 {rollbackMutation.isPending && (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  <Spinner className="mr-2 h-4 w-4" />
                                 )}
                                 {currentVideo?.container ? 'Restore Anyway' : 'Restore'}
                               </AlertDialogAction>

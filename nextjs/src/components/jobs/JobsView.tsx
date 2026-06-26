@@ -30,7 +30,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
-import { Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
 
 type JobSummary = RouterOutputs['dashboard']['jobs']['list']['data'][number];
@@ -66,7 +67,7 @@ function JobStatusBadge({ status }: { status: JobStatus }) {
   if (status === 'running') {
     return (
       <Badge variant="outline" className="border-primary/40 bg-primary/10 text-primary">
-        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+        <Spinner className="h-3 w-3 mr-1" />
         Running
       </Badge>
     );
@@ -100,7 +101,7 @@ function ItemStatusBadge({ status }: { status: string }) {
     case 'updating':
       return (
         <Badge variant="outline" className="border-primary/40 bg-primary/10 text-primary">
-          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+          <Spinner className="h-3 w-3 mr-1" />
           {status === 'queued' ? 'Queued' : 'Updating…'}
         </Badge>
       );
@@ -165,7 +166,7 @@ function JobDetailSheet({
         <div className="mt-6">
           {isLoading || !data ? (
             <div className="flex justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Spinner className="h-8 w-8 text-muted-foreground" />
             </div>
           ) : data.items.length === 0 ? (
             <p className="text-center py-8 text-muted-foreground">
@@ -272,7 +273,7 @@ export default function JobsView() {
       <CardContent className="p-0">
         {isLoading ? (
           <div className="flex justify-center py-8">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Spinner className="h-8 w-8 text-muted-foreground" />
           </div>
         ) : jobs.length === 0 ? (
           <div className="text-center py-12">
@@ -325,7 +326,7 @@ export default function JobsView() {
               disabled={isFetchingNextPage}
             >
               {isFetchingNextPage && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="mr-2 h-4 w-4" />
               )}
               Load more
             </Button>

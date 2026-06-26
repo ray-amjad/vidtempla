@@ -7,7 +7,7 @@ import { useState } from 'react';
 import Head from 'next/head';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { OrganizationProvider } from '@/contexts/OrganizationContext';
-import { Loader2 } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { api } from '@/utils/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -96,7 +96,7 @@ export default function OrgUsagePage() {
         <div className="space-y-6">
           {isLoading ? (
             <div className="flex items-center gap-2 p-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Spinner className="h-4 w-4" />
               <span className="text-sm text-muted-foreground">Loading usage data...</span>
             </div>
           ) : usage ? (
@@ -353,7 +353,7 @@ export default function OrgUsagePage() {
                           >
                             {isFetchingNextPage ? (
                               <>
-                                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                <Spinner className="mr-2 h-3 w-3" />
                                 Loading...
                               </>
                             ) : (

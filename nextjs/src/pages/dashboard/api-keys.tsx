@@ -9,7 +9,8 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Loader2, Plus, Copy, Check, Trash2, BookOpen, ExternalLink } from 'lucide-react';
+import { Plus, Copy, Check, Trash2, BookOpen, ExternalLink } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import Link from 'next/link';
 import { api } from '@/utils/api';
 import { toast } from 'sonner';
@@ -280,7 +281,7 @@ export default function ApiKeysPage() {
                         >
                           {createKeyMutation.isPending ? (
                             <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              <Spinner className="mr-2 h-4 w-4" />
                               Creating...
                             </>
                           ) : (
@@ -296,7 +297,7 @@ export default function ApiKeysPage() {
             <CardContent className="p-0">
               {keysLoading ? (
                 <div className="flex items-center gap-2 p-6">
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                   <span className="text-sm text-muted-foreground">Loading API keys...</span>
                 </div>
               ) : apiKeysList && apiKeysList.length > 0 ? (
