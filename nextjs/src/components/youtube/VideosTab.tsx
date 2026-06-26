@@ -3,7 +3,7 @@
  * Manage videos and assign to containers
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { api } from '@/utils/api';
 import type { RouterOutputs } from '@/utils/api';
 import { Button } from '@/components/ui/button';
@@ -44,7 +44,7 @@ import EditVariablesSheet from './EditVariablesSheet';
 import HistoryDrawer from './HistoryDrawer';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
 
-type VideoWithRelations = RouterOutputs['dashboard']['youtube']['videos']['list'][number];
+type VideoWithRelations = RouterOutputs['dashboard']['youtube']['videos']['list']['data'][number];
 
 type DriftFilter = 'all' | 'drifted' | 'clean';
 
@@ -73,7 +73,27 @@ export default function VideosTab() {
     hasDrift:
       filters.drift === 'drifted' ? true : filters.drift === 'clean' ? false : undefined,
   };
-  const { data: videos, isLoading, refetch } = api.dashboard.youtube.videos.list.useQuery(apiFilters);
+  const { data, isLoading, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    api.dashboard.youtube.videos.list.useInfiniteQuery(apiFilters, {
+      getNextPageParam: (lastPage) => lastPage.meta.cursor ?? undefined,
+    });
+  const videos = data?.pages.flatMap((page) => page.data) ?? [];
+
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || !hasNextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { rootMargin: '200px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
   const assignMutation = api.dashboard.youtube.videos.assignToContainer.useMutation();
 
   // Per-video push status (Updating…/Retry/Failed) now lives on the Jobs page,
@@ -347,6 +367,16 @@ export default function VideosTab() {
                 })}
               </TableBody>
             </Table>
+          )}
+          {videos.length > 0 && (
+            <>
+              <div ref={loadMoreRef} />
+              {isFetchingNextPage && (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </>
           )}
         </div>
 
