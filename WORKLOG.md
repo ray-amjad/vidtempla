@@ -57,8 +57,8 @@ _None yet. Each entry: file:line — reason._
   (raw `<img>` already clean). Counts recorded in GOAL.md baseline table.
 
 ## Progress
-- **Phase 0 Foundations:** F1✓ F2✓ F3✓ F4✓ F5✓ F6✓. F7 (twin extraction) **deferred**
-  (large/risky, not verifier-gated — recommend a separate PR; no parity faked).
+- **Phase 0 Foundations:** F1✓ F2✓ F3✓ F4✓ F5✓ F6✓ F7✓ (twin extraction into
+  components/views; SettingsView slug-aware; UsageView showMembers; no parity faked).
 - **Phase 1 Sweep:** S1✓ S2✓ S3✓ S4✓ S7✓. S5/S6 (card/spacing + overlay polish) deferred
   (cosmetic, not verifier-gated).
 - **Phase 2 Verify:** verifier 11/11✓, tsc✓, build✓, lint✓, test:org-guards✓.

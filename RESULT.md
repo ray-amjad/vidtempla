@@ -41,10 +41,17 @@ Branch: `dashboard-consistency` (5 commits off `main`). See `GOAL.md` for the co
 - **S7** Adopted the `DataTable` primitive for the admin Recent Users table; improved the
   primitive to only show `cursor-pointer`/click when `onRowClick` is provided.
 
+**F7 — extract shared twin-page bodies** (done, per user request to include in this PR)
+- `/dashboard/*` and `/org/[slug]/*` bodies extracted into `components/views/`
+  (Settings/ApiKeys/Pricing/McpServer/UsageView); pages are now thin wrappers (org wraps
+  the view in `<OrganizationProvider>`).
+- `SettingsView` is slug-aware (org pricing link + checkout-redirect slug preserved — a real
+  org behavior the naive extraction would have dropped; restored).
+- `UsageView` takes `showMembers` — org renders the By-Member card + Member column, dashboard
+  does not. **No cards/columns dropped to fake parity** (anti-cheating rule honored).
+- Verifier scope expanded to include `components/views` so the extracted bodies stay covered.
+
 ## Deliberately deferred (recommend separate PRs)
-- **F7 — extract shared twin-page bodies** (`/dashboard/*` ↔ `/org/[slug]/*`). Large, risky,
-  structural; **not required by the verifier or any outcome condition**. Better reviewed on its
-  own. No cards/columns were dropped to fake twin parity (anti-cheating rule honored).
 - **S5/S6 — card/spacing + overlay polish.** Cosmetic, not verifier-gated.
 
 ## Remaining gate: visual parity
