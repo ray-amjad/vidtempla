@@ -17,19 +17,20 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Copy, Check } from 'lucide-react';
-import { toast } from 'sonner';
+import { useToast } from '@/hooks/use-toast';
 
 const SERVER_URL = 'https://www.vidtempla.com/api/mcp';
 
 const MCP_COMMAND = `claude mcp add --transport http vidtempla ${SERVER_URL} -s user`;
 
 export default function OrgMcpServerPage() {
+  const { toast } = useToast();
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const copyToClipboard = async (text: string, field: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedField(field);
-    toast.success('Copied to clipboard');
+    toast({ title: 'Copied to clipboard' });
     setTimeout(() => setCopiedField(null), 2000);
   };
 

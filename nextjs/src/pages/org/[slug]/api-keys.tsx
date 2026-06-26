@@ -14,7 +14,7 @@ import { Plus, Copy, Check, Trash2, BookOpen, ExternalLink } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner';
 import Link from 'next/link';
 import { api } from '@/utils/api';
-import { toast } from 'sonner';
+import { useToast } from '@/hooks/use-toast';
 import {
   Dialog,
   DialogContent,
@@ -59,6 +59,7 @@ import {
 } from '@/components/ui/card';
 
 export default function OrgApiKeysPage() {
+  const { toast } = useToast();
   // API Keys
   const { data: apiKeysList, isLoading: keysLoading } =
     api.dashboard.apiKeys.list.useQuery();
@@ -70,7 +71,9 @@ export default function OrgApiKeysPage() {
       utils.dashboard.apiKeys.list.invalidate();
     },
     onError: (error) => {
-      toast.error('Failed to create API key', {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to create API key',
         description: error.message,
       });
     },
@@ -79,10 +82,12 @@ export default function OrgApiKeysPage() {
   const revokeKeyMutation = api.dashboard.apiKeys.revoke.useMutation({
     onSuccess: () => {
       utils.dashboard.apiKeys.list.invalidate();
-      toast.success('API key revoked');
+      toast({ title: 'API key revoked' });
     },
     onError: (error) => {
-      toast.error('Failed to revoke API key', {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to revoke API key',
         description: error.message,
       });
     },
@@ -126,7 +131,7 @@ export default function OrgApiKeysPage() {
     if (!createdKey) return;
     await navigator.clipboard.writeText(createdKey);
     setCopied(true);
-    toast.success('API key copied to clipboard');
+    toast({ title: 'API key copied to clipboard' });
     setTimeout(() => setCopied(false), 2000);
   };
 

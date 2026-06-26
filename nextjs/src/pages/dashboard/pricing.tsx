@@ -11,7 +11,7 @@ import { Check } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { api } from '@/utils/api';
 import { useState } from 'react';
-import { toast } from 'sonner';
+import { useToast } from '@/hooks/use-toast';
 import PlanChangeConfirmDialog from '@/components/billing/PlanChangeConfirmDialog';
 import { type PlanTier, isUpgrade as checkIsUpgrade, PLAN_CONFIG } from '@/lib/stripe';
 
@@ -73,6 +73,7 @@ const pricingTiers = [
 ];
 
 export default function PricingPage() {
+  const { toast } = useToast();
   const utils = api.useUtils();
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [planChangeDialog, setPlanChangeDialog] = useState<{
@@ -100,7 +101,9 @@ export default function PricingPage() {
       window.location.href = data.checkoutUrl;
     },
     onError: (error) => {
-      toast.error('Failed to create checkout session', {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to create checkout session',
         description: error.message,
       });
       setCheckoutLoading(null);
@@ -110,14 +113,16 @@ export default function PricingPage() {
   // Update subscription mutation (for existing subscribers)
   const updateSubscription = api.dashboard.billing.updateSubscription.useMutation({
     onSuccess: (data) => {
-      toast.success(data.message);
+      toast({ title: data.message });
       setPlanChangeDialog({ open: false, targetPlan: null });
       // Invalidate queries to refresh data
       utils.dashboard.billing.getCurrentPlan.invalidate();
       utils.dashboard.billing.getUsageStats.invalidate();
     },
     onError: (error) => {
-      toast.error('Failed to update subscription', {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to update subscription',
         description: error.message,
       });
     },

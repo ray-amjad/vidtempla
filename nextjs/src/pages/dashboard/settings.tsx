@@ -14,11 +14,12 @@ import { useUser } from '@/hooks/useUser';
 import { ExternalLink } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { api } from '@/utils/api';
-import { toast } from 'sonner';
+import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 
 export default function SettingsPage() {
+  const { toast } = useToast();
   const router = useRouter();
   const { user, loading: userLoading } = useUser();
   const [portalLoading, setPortalLoading] = useState(false);
@@ -45,7 +46,8 @@ export default function SettingsPage() {
     if (!router.isReady || handledRef.current) return;
     if (router.query.checkout === 'success') {
       handledRef.current = true;
-      toast.success('Subscription activated!', {
+      toast({
+        title: 'Subscription activated!',
         description: 'Your subscription has been successfully activated.',
       });
       // Clear the query parameter
@@ -61,7 +63,9 @@ export default function SettingsPage() {
         window.open(result.data.portalUrl, '_blank');
       }
     } catch (error) {
-      toast.error('Failed to open customer portal', {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to open customer portal',
         description: error instanceof Error ? error.message : 'Please try again later',
       });
     } finally {
