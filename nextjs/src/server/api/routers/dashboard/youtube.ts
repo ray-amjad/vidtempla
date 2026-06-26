@@ -500,6 +500,8 @@ export const youtubeRouter = router({
           containerId: z.union([z.string().uuid(), z.literal('')]).optional(),
           search: z.string().optional(),
           hasDrift: z.boolean().optional(),
+          cursor: z.string().optional(),
+          limit: z.number().min(1).max(100).optional(),
         })
       )
       .query(async ({ ctx, input }) => {
@@ -519,13 +521,15 @@ export const youtubeRouter = router({
             containerId: input.containerId === '' ? undefined : input.containerId,
             search: input.search,
             hasDrift: input.hasDrift,
+            cursor: input.cursor,
+            limit: input.limit,
           },
           ctx.organizationId
         );
         if ('error' in result) {
           throwServiceError(result.error);
         }
-        return result.data.data;
+        return result.data;
       }),
 
     get: orgProcedure
