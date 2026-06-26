@@ -265,7 +265,11 @@ export const youtubeRouter = router({
           .returning();
 
         if (videoIdsToPush.length > 0) {
-          await pushVideoDescriptions(videoIdsToPush, ctx.user.id);
+          await pushVideoDescriptions(videoIdsToPush, ctx.user.id, {
+            jobContext: {
+              create: { trigger: "container_update", label: data?.name ?? "Container update" },
+            },
+          });
         }
 
         return data;
@@ -408,7 +412,11 @@ export const youtubeRouter = router({
           .returning();
 
         if (videoIdsToPush.length > 0) {
-          await pushVideoDescriptions(videoIdsToPush, ctx.user.id);
+          await pushVideoDescriptions(videoIdsToPush, ctx.user.id, {
+            jobContext: {
+              create: { trigger: "template_update", label: data?.name ?? "Template update" },
+            },
+          });
         }
 
         return data;
@@ -709,7 +717,10 @@ export const youtubeRouter = router({
         for (const videoId of input.videoIds) {
           await verifyVideoOwnership(videoId, ctx.organizationId);
         }
-        const result = await pushVideoDescriptions(input.videoIds, ctx.user.id, { force: input.force });
+        const result = await pushVideoDescriptions(input.videoIds, ctx.user.id, {
+          force: input.force,
+          jobContext: { create: { trigger: 'manual_push', label: 'Manual update' } },
+        });
         if ('error' in result) {
           throwServiceError(result.error);
         }
@@ -725,12 +736,24 @@ export const youtubeRouter = router({
       .mutation(async ({ ctx, input }) => {
         await verifyVideoOwnership(input.videoId, ctx.organizationId);
 
-        await db
+        const [video] = await db
           .update(youtubeVideos)
           .set({ pushAttempts: 0, nextRetryAt: null, lastPushError: null })
-          .where(eq(youtubeVideos.id, input.videoId));
+          .where(eq(youtubeVideos.id, input.videoId))
+          .returning({
+            currentPushJobId: youtubeVideos.currentPushJobId,
+            title: youtubeVideos.title,
+          });
 
-        const result = await pushVideoDescriptions([input.videoId], ctx.user.id);
+        // Continue the original job when known; otherwise track this manual
+        // retry as a fresh job.
+        const jobContext = video?.currentPushJobId
+          ? { jobId: video.currentPushJobId }
+          : { create: { trigger: 'retry' as const, label: video?.title ?? 'Retry' } };
+
+        const result = await pushVideoDescriptions([input.videoId], ctx.user.id, {
+          jobContext,
+        });
         if ('error' in result) {
           throwServiceError(result.error);
         }

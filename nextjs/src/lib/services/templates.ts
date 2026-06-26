@@ -235,7 +235,10 @@ export async function updateTemplate(
     }
 
     if (videoIdsToPush.length > 0) {
-      await pushVideoDescriptions(videoIdsToPush, userId, { force: data.force });
+      await pushVideoDescriptions(videoIdsToPush, userId, {
+        force: data.force,
+        jobContext: { create: { trigger: "template_update", label: template.name } },
+      });
     }
 
     return { data: { ...template, variables: parseVariables(template.content) } };

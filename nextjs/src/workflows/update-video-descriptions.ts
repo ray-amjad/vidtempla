@@ -11,6 +11,7 @@ import {
   markYouTubeQuotaExhausted,
   nextQuotaResetAt,
 } from "@/lib/services/quota-guard";
+import { setJobItemStatus } from "@/lib/services/push-jobs";
 
 const DESCRIPTION_PUSH_RESERVATION_MS = 2 * 60 * 1000;
 
@@ -31,6 +32,12 @@ export interface PushPayload {
   renderVersion: number;
   userId: string;
   organizationId: string | null;
+  // The push job grouping this video's push. null for legacy payloads enqueued
+  // before jobs existed (setJobItemStatus no-ops on null).
+  jobId: string | null;
+  // Creation-time metadata (job label) — carried so callers don't re-query the
+  // title; unused by the workflow itself.
+  videoTitle: string | null;
 }
 
 export async function updateVideoDescriptionsWorkflow(payload: PushPayload) {
@@ -46,7 +53,12 @@ export async function updateVideoDescriptionsWorkflow(payload: PushPayload) {
     // throwing, so they never land here and never burn an attempt.
     const message =
       err instanceof Error ? err.message : String(err ?? "unknown error");
-    await recordLastingPushFailure(payload.videoId, payload.renderVersion, message);
+    await recordLastingPushFailure(
+      payload.videoId,
+      payload.renderVersion,
+      message,
+      payload.jobId
+    );
     return { success: true, videoId: payload.videoId, retryScheduled: true };
   }
 }
@@ -102,6 +114,9 @@ async function runUpdateVideoDescription(payload: PushPayload) {
     // idle reset on the payload's render_version so we never clobber the newer
     // push's queued/updating state.
     await resetPushStatusIdle(videoId, renderVersion);
+    // This job's render was overtaken by a newer push (which owns its own job
+    // item); let this job's item complete cleanly as superseded.
+    await setJobItemStatus(payload.jobId, videoId, "superseded");
     return { success: true, videoId, stale: true };
   }
 
@@ -118,6 +133,7 @@ async function runUpdateVideoDescription(payload: PushPayload) {
       videoId,
     });
     await resetPushStatusIdle(videoId, renderVersion);
+    await setJobItemStatus(payload.jobId, videoId, "succeeded", null);
     return { success: true, videoId, noop: true };
   }
 
@@ -182,6 +198,12 @@ async function runUpdateVideoDescription(payload: PushPayload) {
             eq(youtubeVideos.renderVersion, renderVersion)
           )
         );
+      await setJobItemStatus(
+        payload.jobId,
+        videoId,
+        "retry_scheduled",
+        "reservation held by a previous attempt"
+      );
       console.warn(
         "[update-video-descriptions] claim blocked by an active reservation — handed to retry cron",
         { videoId, renderVersion }
@@ -189,12 +211,16 @@ async function runUpdateVideoDescription(payload: PushPayload) {
       return { success: true, videoId, retryScheduled: true };
     }
 
+    await setJobItemStatus(payload.jobId, videoId, "superseded");
     console.warn(
       "[update-video-descriptions] CAS claim failed before YouTube PUT — skipping side effect",
       { videoId, renderVersion }
     );
     return { success: true, videoId, stale: true };
   }
+
+  // Claim succeeded: this render now owns the row. Reflect Updating… on the job.
+  await setJobItemStatus(payload.jobId, videoId, "updating", null);
 
   // Pre-empt doomed batches: if the quota breaker is already tripped, skip the
   // PUT entirely (one quota hit would otherwise make all ~232 remaining videos
@@ -205,7 +231,7 @@ async function runUpdateVideoDescription(payload: PushPayload) {
       "[update-video-descriptions] quota breaker tripped — deferring push to reset",
       { videoId }
     );
-    await scheduleQuotaRetry(videoId, claimedRenderVersion);
+    await scheduleQuotaRetry(videoId, claimedRenderVersion, payload.jobId);
     return { success: true, videoId, retryScheduled: true, quotaDeferred: true };
   }
 
@@ -234,7 +260,7 @@ async function runUpdateVideoDescription(payload: PushPayload) {
     // A video is therefore never marked Failed purely because quota was out.
     if (isYouTubeQuotaError(err)) {
       await markYouTubeQuotaExhausted();
-      await scheduleQuotaRetry(videoId, claimedRenderVersion);
+      await scheduleQuotaRetry(videoId, claimedRenderVersion, payload.jobId);
       return { success: true, videoId, retryScheduled: true, quotaDeferred: true };
     }
     // Non-quota error: rethrow so the step's built-in quick retries (3x) get a
@@ -300,9 +326,11 @@ async function runUpdateVideoDescription(payload: PushPayload) {
     // Guarded on claimedRenderVersion, so this no-ops when the concurrent writer
     // already moved the row on — that newer push owns the visible status.
     await resetPushStatusIdle(videoId, claimedRenderVersion);
+    await setJobItemStatus(payload.jobId, videoId, "superseded");
     return { success: true, videoId, stale: true };
   }
 
+  await setJobItemStatus(payload.jobId, videoId, "succeeded", null);
   return { success: true, videoId };
 }
 
@@ -340,7 +368,8 @@ async function resetPushStatusIdle(
  */
 async function scheduleQuotaRetry(
   videoId: string,
-  renderVersionGuard: number
+  renderVersionGuard: number,
+  jobId: string | null
 ): Promise<void> {
   await db
     .update(youtubeVideos)
@@ -357,6 +386,12 @@ async function scheduleQuotaRetry(
         eq(youtubeVideos.renderVersion, renderVersionGuard)
       )
     );
+  await setJobItemStatus(
+    jobId,
+    videoId,
+    "retry_scheduled",
+    "waiting for quota reset"
+  );
 }
 
 /**
@@ -372,7 +407,8 @@ async function scheduleQuotaRetry(
 async function recordLastingPushFailure(
   videoId: string,
   renderVersionGuard: number,
-  errorMessage: string
+  errorMessage: string,
+  jobId: string | null
 ): Promise<void> {
   "use step";
 
@@ -393,7 +429,9 @@ async function recordLastingPushFailure(
 
   if (incremented.length === 0) {
     // Superseded by a newer push (which owns the visible status now), or the
-    // row is gone. Nothing to record.
+    // row is gone. The newer push owns its own job item; let this job's item
+    // settle as superseded so the old job can complete.
+    await setJobItemStatus(jobId, videoId, "superseded");
     return;
   }
 
@@ -417,4 +455,10 @@ async function recordLastingPushFailure(
         eq(youtubeVideos.renderVersion, renderVersionGuard)
       )
     );
+  await setJobItemStatus(
+    jobId,
+    videoId,
+    terminal ? "failed" : "retry_scheduled",
+    errorMessage
+  );
 }

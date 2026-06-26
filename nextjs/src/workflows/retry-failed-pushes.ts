@@ -2,6 +2,7 @@ import { and, desc, eq, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { youtubeChannels, youtubeVideos } from "@/db/schema";
 import { pushVideoDescriptions } from "@/lib/services/videos";
+import { setJobItemStatus } from "@/lib/services/push-jobs";
 
 /**
  * Hourly retry sweep for pushes that failed and scheduled a retry.
@@ -22,7 +23,7 @@ export async function retryFailedPushesWorkflow() {
   const due = await loadDueRetries();
 
   for (const video of due) {
-    await enqueueRetry(video.id, video.userId);
+    await enqueueRetry(video);
   }
 
   console.log("[retry-failed-pushes] complete", { retriesQueued: due.length });
@@ -39,8 +40,15 @@ async function loadDueRetries() {
 
   // Newest-first so the most relevant videos retry (and start) first. userId is
   // needed to re-render under the right ownership; it comes from the channel.
+  // currentPushJobId continues the original job (no second job per retry);
+  // title is the fallback label if that pointer was cleared.
   return await db
-    .select({ id: youtubeVideos.id, userId: youtubeChannels.userId })
+    .select({
+      id: youtubeVideos.id,
+      userId: youtubeChannels.userId,
+      currentPushJobId: youtubeVideos.currentPushJobId,
+      title: youtubeVideos.title,
+    })
     .from(youtubeVideos)
     .innerJoin(youtubeChannels, eq(youtubeVideos.channelId, youtubeChannels.id))
     .where(
@@ -52,14 +60,27 @@ async function loadDueRetries() {
     .orderBy(desc(youtubeVideos.publishedAt), desc(youtubeVideos.createdAt));
 }
 
-async function enqueueRetry(videoId: string, userId: string) {
+async function enqueueRetry(video: {
+  id: string;
+  userId: string;
+  currentPushJobId: string | null;
+  title: string | null;
+}) {
   "use step";
 
+  const { id: videoId, userId } = video;
+
   try {
+    // Continue the original job when we still know it; otherwise (pointer
+    // cleared / legacy row) start a fresh retry job so the push is still tracked.
+    const jobContext = video.currentPushJobId
+      ? { jobId: video.currentPushJobId }
+      : { create: { trigger: "retry" as const, label: video.title ?? "Retry" } };
+
     // No force: re-render the current desired state but still respect the drift
     // gate, so a YouTube edit made between the failure and this retry is never
     // silently overwritten (the user resolves the drift first).
-    const result = await pushVideoDescriptions([videoId], userId);
+    const result = await pushVideoDescriptions([videoId], userId, { jobContext });
     if ("error" in result) {
       // The only returned (non-thrown) error is VIDEO_HAS_DRIFT: the user edited
       // this video on YouTube, so re-pushing on the same schedule would loop
@@ -68,6 +89,15 @@ async function enqueueRetry(videoId: string, userId: string) {
       // (A successful or no-op push already moved the row off retry_scheduled in
       // buildPushPayload, so we only ever terminalize rows still pending retry.)
       await markRetryTerminal(videoId, result.error.message);
+      // Settle the job item too, else the job shows 'Running' forever (the cron
+      // stops re-selecting this video, so nothing else would ever move it off
+      // 'retry_scheduled').
+      await setJobItemStatus(
+        video.currentPushJobId,
+        videoId,
+        "failed",
+        result.error.message
+      );
     }
   } catch (err) {
     // Unexpected throw (e.g. a workflow-enqueue infra hiccup). pushVideoDescriptions

@@ -235,6 +235,13 @@ export const youtubeVideos = pgTable("youtube_videos", {
     withTimezone: true,
   }),
   lastPushError: text("last_push_error"),
+  // Points at the in-flight push job grouping this video's current push. The
+  // hourly retry cron reads it to re-enqueue a failed push under its original
+  // job rather than spawning a new one. Cleared (set null) if the job is deleted.
+  currentPushJobId: uuid("current_push_job_id").references(
+    () => descriptionPushJobs.id,
+    { onDelete: "set null" }
+  ),
   publishedAt: timestamp("published_at", {
     mode: "date",
     withTimezone: true,
@@ -565,3 +572,71 @@ export const appState = pgTable("app_state", {
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+// A Job groups every per-video description push fired by one user action (a
+// template/container edit, a manual "Update to YouTube", a variable edit, a
+// drift resolve). Created only when a push actually enqueues >= 1 video. Job
+// status is DERIVED from its items at read time (running if any item is still
+// active, else completed) — there are no counter columns to drift.
+export const descriptionPushJobs = pgTable(
+  "description_push_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: text("organization_id").references(
+      () => organization.id,
+      { onDelete: "cascade" }
+    ),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // template_update | container_update | manual_push | variable_edit |
+    // drift_resolve | retry
+    trigger: text("trigger").notNull(),
+    // Display name: template/container name, video title, or "Manual update".
+    label: text("label").notNull(),
+    totalVideos: integer("total_videos").notNull(),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    orgCreatedAtIdx: index("description_push_jobs_org_created_at_idx").on(
+      table.organizationId,
+      table.createdAt.desc()
+    ),
+    userCreatedAtIdx: index("description_push_jobs_user_created_at_idx").on(
+      table.userId,
+      table.createdAt.desc()
+    ),
+  })
+);
+
+// One row per (job, video). Persists each push's outcome independently of
+// youtubeVideos.pushStatus, because a later job re-pushing the same video
+// overwrites that column — only a per-(job,video) row preserves a completed
+// job's history.
+export const descriptionPushJobItems = pgTable(
+  "description_push_job_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => descriptionPushJobs.id, { onDelete: "cascade" }),
+    videoId: uuid("video_id")
+      .notNull()
+      .references(() => youtubeVideos.id, { onDelete: "cascade" }),
+    // queued | updating | succeeded | retry_scheduled | failed | superseded
+    status: text("status").notNull().default("queued"),
+    lastError: text("last_error"),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    uniqueJobVideo: unique().on(table.jobId, table.videoId),
+    jobIdIdx: index("description_push_job_items_job_id_idx").on(table.jobId),
+  })
+);

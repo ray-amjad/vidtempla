@@ -20,6 +20,7 @@ export type BreadcrumbItemType = {
 
 const SEGMENT_NAMES: Record<string, string> = {
   youtube: "YouTube",
+  jobs: "Jobs",
   "api-keys": "API Keys",
   "mcp-server": "MCP Server",
   usage: "Usage",
