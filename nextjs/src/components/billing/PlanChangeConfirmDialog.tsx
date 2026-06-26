@@ -13,8 +13,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, ArrowUp, ArrowDown, Check, X, Loader2 } from 'lucide-react';
+import { AlertTriangle, ArrowUp, ArrowDown, Check, X } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import type { PlanTier } from '@/lib/stripe';
+import { formatDateLong } from '@/lib/format';
 
 interface PlanChangeConfirmDialogProps {
   open: boolean;
@@ -92,11 +94,7 @@ export default function PlanChangeConfirmDialog({
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'your next billing date';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+    return formatDateLong(dateString);
   };
 
   return (
@@ -106,7 +104,7 @@ export default function PlanChangeConfirmDialog({
           <DialogTitle className={`flex items-center gap-2 ${isDowngradeToFree ? 'text-destructive' : ''}`}>
             {isUpgrade ? (
               <>
-                <ArrowUp className="h-5 w-5 text-emerald-600" />
+                <ArrowUp className="h-5 w-5 text-success" />
                 Upgrade to {targetPlan.name}?
               </>
             ) : isDowngradeToFree ? (
@@ -116,7 +114,7 @@ export default function PlanChangeConfirmDialog({
               </>
             ) : (
               <>
-                <ArrowDown className="h-5 w-5 text-amber-600" />
+                <ArrowDown className="h-5 w-5 text-warning" />
                 Downgrade to {targetPlan.name}?
               </>
             )}
@@ -133,7 +131,7 @@ export default function PlanChangeConfirmDialog({
                       </p>
                       <ul className="space-y-1">
                         {featuresGaining.map((feature, index) => (
-                          <li key={index} className="flex items-center gap-2 text-sm text-emerald-600">
+                          <li key={index} className="flex items-center gap-2 text-sm text-success">
                             <Check className="h-4 w-4 flex-shrink-0" />
                             {feature}
                           </li>
@@ -144,7 +142,7 @@ export default function PlanChangeConfirmDialog({
                   <div className="bg-muted p-3 rounded-md">
                     <p className="text-sm">
                       <span className="font-medium">Today&apos;s charge:</span>{' '}
-                      <span className="text-emerald-600 font-semibold">~{proratedAmountFormatted}</span>
+                      <span className="text-success font-semibold">~{proratedAmountFormatted}</span>
                       <span className="text-muted-foreground text-xs ml-1">(prorated)</span>
                     </p>
                     <p className="text-sm mt-1">
@@ -171,8 +169,8 @@ export default function PlanChangeConfirmDialog({
                       </ul>
                     </div>
                   )}
-                  <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3 rounded-md">
-                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                  <div className="bg-warning/10 border border-warning/30 p-3 rounded-md">
+                    <p className="text-sm text-warning">
                       {isDowngradeToFree ? (
                         <>
                           Your {currentPlan.name} features remain active until{' '}
@@ -200,14 +198,14 @@ export default function PlanChangeConfirmDialog({
             Cancel
           </Button>
           <Button
-            variant={isUpgrade ? 'default' : 'destructive'}
+            variant={isUpgrade ? 'success' : 'default'}
             onClick={handleConfirm}
             disabled={!canConfirm || isLoading}
-            className={`min-w-[160px] ${isUpgrade ? 'bg-emerald-600 hover:bg-emerald-500' : ''}`}
+            className="min-w-[160px]"
           >
             {isLoading ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="mr-2 h-4 w-4" />
                 {isUpgrade ? 'Upgrading...' : 'Processing...'}
               </>
             ) : canConfirm ? (

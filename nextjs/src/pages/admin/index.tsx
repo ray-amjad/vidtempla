@@ -2,20 +2,48 @@ import Head from "next/head";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import { api } from "@/utils/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { DataTable } from "@/components/ui/data-table";
+import { type ColumnDef } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
+import { formatDate } from "@/lib/format";
 import { Loader2, Users, CreditCard, UserPlus, Tv } from "lucide-react";
 
 export default function AdminPage() {
   const { data: stats, isLoading, isError } = api.admin.stats.useQuery();
   const { data: recentUsers } = api.admin.recentUsers.useQuery();
+
+  type RecentUser = NonNullable<typeof recentUsers>[number];
+  const userColumns: ColumnDef<RecentUser>[] = [
+    {
+      accessorKey: "name",
+      header: "Name",
+      cell: ({ row }) => (
+        <span className="font-medium">{row.original.name}</span>
+      ),
+    },
+    { accessorKey: "email", header: "Email" },
+    {
+      accessorKey: "emailVerified",
+      header: "Verified",
+      cell: ({ row }) => (
+        <Badge variant={row.original.emailVerified ? "default" : "secondary"}>
+          {row.original.emailVerified ? "Yes" : "No"}
+        </Badge>
+      ),
+    },
+    {
+      accessorKey: "planTier",
+      header: "Plan",
+      cell: ({ row }) => (
+        <Badge variant="outline">{row.original.planTier ?? "free"}</Badge>
+      ),
+    },
+    {
+      accessorKey: "createdAt",
+      header: "Signed Up",
+      cell: ({ row }) => formatDate(row.original.createdAt),
+    },
+  ];
 
   if (isError) {
     return (
@@ -95,42 +123,7 @@ export default function AdminPage() {
 
           <div>
             <h2 className="text-lg font-semibold mb-4">Recent Users</h2>
-            <Card>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Verified</TableHead>
-                    <TableHead>Plan</TableHead>
-                    <TableHead>Signed Up</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recentUsers?.map((u) => (
-                    <TableRow key={u.id}>
-                      <TableCell className="font-medium">{u.name}</TableCell>
-                      <TableCell>{u.email}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={u.emailVerified ? "default" : "secondary"}
-                        >
-                          {u.emailVerified ? "Yes" : "No"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {u.planTier ?? "free"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {new Date(u.createdAt).toLocaleDateString()}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Card>
+            <DataTable columns={userColumns} data={recentUsers ?? []} />
           </div>
         </div>
       )}

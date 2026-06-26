@@ -37,7 +37,8 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Plus, Edit2, Trash2 } from 'lucide-react';
+import { Spinner } from "@/components/ui/spinner";
+import { Plus, Edit, Trash2 } from 'lucide-react';
 import EditContainerModal from './EditContainerModal';
 
 export default function ContainersTab() {
@@ -138,7 +139,7 @@ export default function ContainersTab() {
       <CardContent className="p-0">
         {isLoading ? (
           <div className="flex justify-center py-8">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Spinner className="h-8 w-8 text-muted-foreground" />
           </div>
         ) : !containers || containers.length === 0 ? (
           <div className="text-center py-12">
@@ -173,7 +174,7 @@ export default function ContainersTab() {
                         size="sm"
                         onClick={() => openEditDialog(container.id)}
                       >
-                        <Edit2 className="h-4 w-4" />
+                        <Edit className="h-4 w-4" />
                       </Button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
@@ -183,7 +184,7 @@ export default function ContainersTab() {
                             disabled={deletingId === container.id}
                           >
                             {deletingId === container.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <Spinner className="h-4 w-4" />
                             ) : (
                               <Trash2 className="h-4 w-4" />
                             )}
@@ -310,7 +311,7 @@ export default function ContainersTab() {
                   Cancel
                 </Button>
                 <Button onClick={handleCreate} disabled={createMutation.isPending}>
-                  {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {createMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
                   Create
                 </Button>
               </div>

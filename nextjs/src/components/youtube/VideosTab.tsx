@@ -39,10 +39,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Loader2, Play, Edit, History, AlertTriangle } from 'lucide-react';
+import { Spinner } from "@/components/ui/spinner";
+import { Play, Edit, History, AlertTriangle } from 'lucide-react';
 import EditVariablesSheet from './EditVariablesSheet';
 import HistoryDrawer from './HistoryDrawer';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
+import { formatDate, formatDateTime } from '@/lib/format';
 
 type VideoWithRelations = RouterOutputs['dashboard']['youtube']['videos']['list']['data'][number];
 
@@ -223,7 +225,7 @@ export default function VideosTab() {
           {/* Videos List */}
           {isLoading ? (
             <div className="flex justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Spinner className="h-8 w-8 text-muted-foreground" />
             </div>
           ) : !videos || videos.length === 0 ? (
             <div className="text-center py-12">
@@ -251,7 +253,7 @@ export default function VideosTab() {
                   return (
                   <TableRow
                     key={video.id}
-                    className={drifted ? 'bg-yellow-500/5' : undefined}
+                    className={drifted ? 'bg-warning/5' : undefined}
                   >
                     <TableCell>
                       <a
@@ -283,8 +285,8 @@ export default function VideosTab() {
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Badge
-                                  variant="outline"
-                                  className="w-fit border-yellow-600/40 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400"
+                                  variant="warning"
+                                  className="w-fit"
                                 >
                                   <AlertTriangle className="h-3 w-3 mr-1" />
                                   Edited on YouTube
@@ -293,7 +295,7 @@ export default function VideosTab() {
                               <TooltipContent>
                                 Description was edited outside VidTempla on{' '}
                                 {video.driftDetectedAt
-                                  ? new Date(video.driftDetectedAt).toLocaleString()
+                                  ? formatDateTime(video.driftDetectedAt)
                                   : 'an unknown date'}
                                 . Click History to review.
                               </TooltipContent>
@@ -327,7 +329,7 @@ export default function VideosTab() {
                     </TableCell>
                     <TableCell>
                       {video.publishedAt
-                        ? new Date(video.publishedAt).toLocaleDateString()
+                        ? formatDate(video.publishedAt)
                         : '—'}
                     </TableCell>
                     <TableCell className="text-right">
@@ -373,7 +375,7 @@ export default function VideosTab() {
               <div ref={loadMoreRef} />
               {isFetchingNextPage && (
                 <div className="flex justify-center py-4">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <Spinner className="h-6 w-6 text-muted-foreground" />
                 </div>
               )}
             </>
@@ -417,7 +419,7 @@ export default function VideosTab() {
                   onClick={handleAssign}
                   disabled={!selectedContainerId || assignMutation.isPending}
                 >
-                  {assignMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {assignMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
                   Assign
                 </Button>
               </div>

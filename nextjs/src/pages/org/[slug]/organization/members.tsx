@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { UserPlus, MoreHorizontal, Trash2, Shield, Crown, Loader2 } from "lucide-react";
+import { UserPlus, MoreHorizontal, Trash2, Shield, Crown } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -127,11 +128,7 @@ function MembersContent() {
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Members</h1>
-          <p className="text-muted-foreground text-sm">Manage your organization members and invitations</p>
-        </div>
+      <div className="flex items-center justify-end mb-6">
         {isAdmin && (
           <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
             <DialogTrigger asChild>
@@ -158,7 +155,7 @@ function MembersContent() {
                   </SelectContent>
                 </Select>
                 <Button onClick={handleInvite} disabled={inviting || !inviteEmail} className="w-full">
-                  {inviting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {inviting && <Spinner className="mr-2 h-4 w-4" />}
                   Send Invitation
                 </Button>
               </div>
@@ -182,7 +179,7 @@ function MembersContent() {
             </div>
             <div className="flex items-center gap-2">
               {pendingMemberId === m.id && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <Spinner className="h-4 w-4 text-muted-foreground" />
               )}
               <Badge variant={roleBadgeVariant(m.role)} className="gap-1">
                 {roleIcon(m.role)}
@@ -248,7 +245,7 @@ function MembersContent() {
                       onClick={() => handleCancelInvitation(inv.id)}
                     >
                       {cancellingInviteId === inv.id && (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Spinner className="mr-2 h-4 w-4" />
                       )}
                       Cancel
                     </Button>
@@ -268,7 +265,7 @@ export default function OrgMembersPage() {
       <Head>
         <title>Members | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout title="Members" description="Manage your organization members and invitations">
         <MembersContent />
       </DashboardLayout>
     </OrganizationProvider>

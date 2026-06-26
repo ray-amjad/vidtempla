@@ -26,7 +26,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, GripVertical, ArrowUp, ArrowDown, X, AlertTriangle } from 'lucide-react';
+import { GripVertical, ArrowUp, ArrowDown, X, AlertTriangle } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import UpdateImpactDialog from './UpdateImpactDialog';
 
 interface EditContainerModalProps {
@@ -341,7 +342,7 @@ export default function EditContainerModal({
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={isSaving || !name.trim()}>
-            {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {isSaving && <Spinner className="mr-2 h-4 w-4" />}
             Save Changes
           </Button>
         </DialogFooter>
@@ -360,7 +361,7 @@ export default function EditContainerModal({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              <AlertTriangle className="h-5 w-5 text-warning" />
               Videos edited on YouTube
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
@@ -374,7 +375,7 @@ export default function EditContainerModal({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => performUpdate(true)} disabled={updateMutation.isPending}>
-              {updateMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {updateMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
               Overwrite all
             </AlertDialogAction>
           </AlertDialogFooter>

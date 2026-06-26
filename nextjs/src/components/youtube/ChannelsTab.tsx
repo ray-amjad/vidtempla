@@ -17,10 +17,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Unplug, RefreshCw, Plus, ArrowUpRight, AlertTriangle, Link2 } from 'lucide-react';
+import { Spinner } from "@/components/ui/spinner";
+import { Unplug, RefreshCw, Plus, ArrowUpRight, AlertTriangle, Link2 } from 'lucide-react';
 import DisconnectConfirmDialog from './DisconnectConfirmDialog';
 import Image from 'next/image';
-import { DateTime } from 'luxon';
+import { formatDateTime, formatNumber } from '@/lib/format';
 import Link from 'next/link';
 export default function ChannelsTab() {
   const { toast } = useToast();
@@ -55,9 +56,7 @@ export default function ChannelsTab() {
 
   const formatTimestamp = (timestamp: string | Date | null) => {
     if (!timestamp) return 'Never';
-
-    const dt = timestamp instanceof Date ? DateTime.fromJSDate(timestamp) : DateTime.fromISO(timestamp);
-    return dt.toLocaleString(DateTime.DATETIME_MED);
+    return formatDateTime(timestamp);
   };
 
   const handleConnect = () => {
@@ -140,7 +139,7 @@ export default function ChannelsTab() {
       <CardContent className="p-0">
         {isLoading ? (
           <div className="flex justify-center py-8">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <Spinner className="h-8 w-8 text-muted-foreground" />
           </div>
         ) : !channels || channels.length === 0 ? (
           <div className="text-center py-12">
@@ -225,7 +224,7 @@ export default function ChannelsTab() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      {channel.subscriberCount?.toLocaleString() || '—'}
+                      {channel.subscriberCount != null ? formatNumber(channel.subscriberCount) : '—'}
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">
@@ -252,7 +251,7 @@ export default function ChannelsTab() {
                             disabled={syncingId === channel.id || channel.syncStatus === 'syncing'}
                           >
                             {syncingId === channel.id || channel.syncStatus === 'syncing' ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <Spinner className="h-4 w-4" />
                             ) : (
                               <RefreshCw className="h-4 w-4" />
                             )}
@@ -265,7 +264,7 @@ export default function ChannelsTab() {
                           disabled={deletingId === channel.id}
                         >
                           {deletingId === channel.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <Spinner className="h-4 w-4" />
                           ) : (
                             <Unplug className="h-4 w-4" />
                           )}

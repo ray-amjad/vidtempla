@@ -33,8 +33,10 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, ChevronDown, AlertTriangle } from 'lucide-react';
+import { ChevronDown, AlertTriangle } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { buildDescription } from '@/utils/templateParser';
+import { formatDate } from '@/lib/format';
 
 type VideoVariableData = RouterOutputs['dashboard']['youtube']['videos']['getVariables'];
 type VideoVariable = NonNullable<VideoVariableData['variables']>[number];
@@ -270,7 +272,7 @@ export default function EditVariablesSheet({
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {isLoading ? (
             <div className="flex justify-center py-16">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Spinner className="h-8 w-8 text-muted-foreground" />
             </div>
           ) : Object.keys(groupedVariables).length === 0 ? (
             <div className="flex items-center justify-center py-16">
@@ -376,7 +378,7 @@ export default function EditVariablesSheet({
               className="flex-1"
             >
               {updateMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="mr-2 h-4 w-4" />
               )}
               Save Changes
             </Button>
@@ -389,11 +391,11 @@ export default function EditVariablesSheet({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              <AlertTriangle className="h-5 w-5 text-warning" />
               This video was edited on YouTube
               {driftInfo?.driftDetectedAt && (
                 <span className="text-sm font-normal text-muted-foreground">
-                  on {new Date(driftInfo.driftDetectedAt).toLocaleDateString()}
+                  on {formatDate(driftInfo.driftDetectedAt)}
                 </span>
               )}
             </AlertDialogTitle>
@@ -411,14 +413,14 @@ export default function EditVariablesSheet({
               onClick={handleKeepYouTubeEdit}
               disabled={resolveDriftMutation.isPending}
             >
-              {resolveDriftMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {resolveDriftMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
               Keep YouTube edit
             </Button>
             <Button
               onClick={handleForceOverwrite}
               disabled={updateMutation.isPending}
             >
-              {updateMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {updateMutation.isPending && <Spinner className="mr-2 h-4 w-4" />}
               Save and overwrite edit
             </Button>
           </AlertDialogFooter>
