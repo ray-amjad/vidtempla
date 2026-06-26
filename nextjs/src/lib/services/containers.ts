@@ -221,7 +221,10 @@ export async function updateContainer(
     }
 
     if (videoIdsToPush.length > 0) {
-      await pushVideoDescriptions(videoIdsToPush, userId, { force: data.force });
+      await pushVideoDescriptions(videoIdsToPush, userId, {
+        force: data.force,
+        jobContext: { create: { trigger: "container_update", label: container.name } },
+      });
     }
 
     return { data: container };

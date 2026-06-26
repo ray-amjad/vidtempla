@@ -48,6 +48,12 @@ import type { ServiceResult, PaginationMeta } from "./types";
 import { assertNoDrift, detectAndRecordDrift } from "./drift";
 import { isYouTubeQuotaExhausted } from "./quota-guard";
 import {
+  createPushJob,
+  resetPushJobItems,
+  setJobItemStatus,
+  type JobContext,
+} from "./push-jobs";
+import {
   decodeCompositeCursor,
   encodeCompositeCursor,
   isEncodedCompositeCursor,
@@ -1151,6 +1157,10 @@ async function buildPushPayload(
     renderVersion,
     userId,
     organizationId: video.youtubeChannel?.organizationId ?? null,
+    // Tagged by the caller (pushVideoDescriptions / updateVideoVariables) once
+    // the job grouping this push is known. null until then.
+    jobId: null,
+    videoTitle: video.title ?? null,
   };
 }
 
@@ -1265,12 +1275,18 @@ async function rescheduleFailedEnqueue(payload: PushPayload): Promise<void> {
         eq(youtubeVideos.renderVersion, payload.renderVersion)
       )
     );
+  await setJobItemStatus(
+    payload.jobId,
+    payload.videoId,
+    "retry_scheduled",
+    "failed to enqueue update"
+  );
 }
 
 export async function pushVideoDescriptions(
   videoIds: string[],
   userId: string,
-  opts: { force?: boolean } = {}
+  opts: { force?: boolean; jobContext?: JobContext } = {}
 ): Promise<ServiceResult<{ success: true }>> {
   const blocked = await assertNoDrift(videoIds, opts);
   if (blocked) {
@@ -1325,6 +1341,50 @@ export async function pushVideoDescriptions(
   for (const result of builtResults) {
     if (result.status === "rejected") errors.push(result.reason);
     else if (result.value !== null) payloads.push(result.value);
+  }
+
+  // Job grouping. Wrapped so a failure here never aborts before Phase 2: the
+  // function's load-bearing invariant is that every committed render_version
+  // bump (push_status='queued') gets a workflow enqueued. If job bookkeeping
+  // throws we proceed untracked (payloads keep jobId=null → setJobItemStatus
+  // no-ops) rather than stranding videos at 'queued' with no workflow.
+  if (opts.jobContext) {
+    const jobContext = opts.jobContext;
+    try {
+      if ("jobId" in jobContext) {
+        // Retry continuing an existing job. Reset the videos we re-enqueue back
+        // to queued; videos that no-op'd (description already current — no
+        // payload built) are already in the desired state, so settle their
+        // items as succeeded. Without this, a no-op retry would leave the item
+        // stuck 'retry_scheduled' and the job 'Running' forever.
+        const jobId = jobContext.jobId;
+        const builtIds = new Set(payloads.map((p) => p.videoId));
+        for (const payload of payloads) payload.jobId = jobId;
+        if (payloads.length > 0) {
+          await resetPushJobItems(jobId, [...builtIds]);
+        }
+        for (const videoId of orderedVideoIds) {
+          if (!builtIds.has(videoId)) {
+            await setJobItemStatus(jobId, videoId, "succeeded", null);
+          }
+        }
+      } else if (payloads.length > 0) {
+        // Create mode: a pure no-op (no payloads) creates no job.
+        const jobId = await createPushJob(db, {
+          organizationId: payloads[0]!.organizationId,
+          userId,
+          trigger: jobContext.create.trigger,
+          label: jobContext.create.label,
+          videoIds: payloads.map((p) => p.videoId),
+        });
+        for (const payload of payloads) payload.jobId = jobId;
+      }
+    } catch (jobErr) {
+      console.error(
+        "pushVideoDescriptions: job grouping failed — proceeding untracked so videos still enqueue",
+        jobErr
+      );
+    }
   }
 
   // Phase 2 — enqueue a workflow for every payload built above. This always
@@ -1451,7 +1511,22 @@ export async function updateVideoVariables(
         await tx.insert(videoVariableEvents).values(events);
       }
 
-      return buildPushPayload(tx, video.id, userId);
+      const built = await buildPushPayload(tx, video.id, userId);
+      if (!built) return null;
+
+      // A variable edit pushes exactly this one video; group it into its own
+      // job (created in the same txn that bumped render_version) so the Jobs
+      // page shows it like any other push. buildPushPayload already loaded the
+      // title, so no extra query is needed for the label.
+      const jobId = await createPushJob(tx, {
+        organizationId: built.organizationId,
+        userId,
+        trigger: "variable_edit",
+        label: built.videoTitle ?? "Variable update",
+        videoIds: [built.videoId],
+      });
+      built.jobId = jobId;
+      return built;
     });
 
     if (payload) {
@@ -1885,7 +1960,12 @@ export async function resolveDrift(
         .where(eq(youtubeVideos.id, video.id));
     });
 
-    return pushVideoDescriptions([video.id], userId, { force: true });
+    return pushVideoDescriptions([video.id], userId, {
+      force: true,
+      jobContext: {
+        create: { trigger: "drift_resolve", label: videoRow.title ?? "Drift resolve" },
+      },
+    });
   } catch (err) {
     console.error("[videos] resolveDrift failed:", err);
     return {

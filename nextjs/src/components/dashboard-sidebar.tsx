@@ -23,6 +23,7 @@ import {
   Server,
   BarChart3,
   Tag,
+  ListChecks,
   Shield,
   ChevronUp,
   Check,
@@ -192,6 +193,7 @@ function OrgSwitcher() {
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
+  jobs: ListChecks,
   "api-keys": Key,
   "mcp-server": Server,
   usage: BarChart3,
@@ -219,6 +221,7 @@ export default function DashboardSidebar() {
 
   const navItems = [
     { title: "Dashboard", url: `${slugPrefix}/dashboard/youtube`, key: "dashboard" },
+    { title: "Jobs", url: `${slugPrefix}/jobs`, key: "jobs" },
     { title: "API Keys", url: `${slugPrefix}/api-keys`, key: "api-keys" },
     { title: "MCP Server", url: `${slugPrefix}/mcp-server`, key: "mcp-server" },
     { title: "Usage", url: `${slugPrefix}/usage`, key: "usage" },
@@ -260,7 +263,7 @@ export default function DashboardSidebar() {
           <SidebarGroupLabel>Channel</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.filter((i) => i.key === "dashboard" || i.key === "usage" || i.key === "pricing").map((item) => {
+              {navItems.filter((i) => i.key === "dashboard" || i.key === "jobs" || i.key === "usage" || i.key === "pricing").map((item) => {
                 const Icon = iconMap[item.key] ?? CreditCard;
                 const isActive =
                   router.asPath === item.url ||

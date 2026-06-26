@@ -141,6 +141,13 @@
       "when": 1782392847016,
       "tag": "0019_tiny_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1782437893420,
+      "tag": "0020_modern_hemingway",
+      "breakpoints": true
     }
   ]
 }
