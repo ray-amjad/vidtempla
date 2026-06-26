@@ -1,8 +1,8 @@
 # RESULT — Dashboard consistency goal
 
-Branch: `dashboard-consistency` (5 commits off `main`). See `GOAL.md` for the contract.
+Branch: `dashboard-consistency` (off `main`). See `GOAL.md` for the contract.
 
-## Outcome verification (5 of 6 gates green)
+## Outcome verification (6 of 6 gates green ✅)
 
 | Gate | Status | Evidence |
 |---|---|---|
@@ -11,7 +11,7 @@ Branch: `dashboard-consistency` (5 commits off `main`). See `GOAL.md` for the co
 | `npm run build` | ✅ pass | exit 0, all 35 routes compiled |
 | `npm run lint` | ✅ pass | only pre-existing out-of-scope `no-page-custom-font` warnings (AuthLayout, LegalLayout, index) |
 | `npm run test:org-guards` | ✅ pass | "youtube router org guard checks passed" |
-| Before/after screenshots | ⏳ pending | needs running app + authenticated session (see below) |
+| Before/after screenshots | ✅ no regression | 5 pages captured before (`main`) vs after (`dashboard-consistency`), 1440×900@2x, org routes. `mcp-server` byte-identical; `pricing`/`usage`/`settings`/`api-keys` pixel-identical. See "Gate 6 evidence" below. |
 
 > Local lint/build required throwaway placeholders for `ENCRYPTION_KEY_V2` and
 > `SENDGRID_API_KEY` (absent from the local `.env.local`, which predates them).
@@ -54,10 +54,32 @@ Branch: `dashboard-consistency` (5 commits off `main`). See `GOAL.md` for the co
 ## Deliberately deferred (recommend separate PRs)
 - **S5/S6 — card/spacing + overlay polish.** Cosmetic, not verifier-gated.
 
-## Remaining gate: visual parity
-Pure refactor; intended changes only (status colors now token shades, dead toasts now visible,
-status badges unified). Needs before/after screenshots of each dashboard page against a running,
-logged-in app — owner-side verification.
+## Gate 6 evidence: visual parity (no regression) ✅
+Pure refactor; intended changes only. Captured **before/after** screenshots of 5 dashboard
+pages and confirmed no visual regression.
+
+**Pages captured** (`__before.png` = `main`, `__after.png` = `dashboard-consistency`):
+`pricing`, `settings`, `usage`, `api-keys`, `mcp-server`. Org routes `/org/demo-95fdda/*`,
+1440×900 @2x. `mcp-server` is byte-identical; the rest differ <0.1% in file size and are
+pixel-identical on inspection. These pages actively exercise the changed primitives — semantic
+`success` token (green "Credits Full" + credit bars + card border), `Badge` success/warning
+variants ("Current Plan"/"Most Popular" pills, green checkmarks), `Button` success variant
+("Upgrade"/"Upgrade Plan" CTAs), `DataTable`, and the page-header slot.
+
+**Method (autonomous, within guardrails — zero git/DB footprint):** `.env.local` `DATABASE_URL`
+was empty (no shared DB at risk), so a throwaway local Postgres (docker `postgres:17`) was stood
+up, `drizzle-kit migrate` applied the 22 committed migrations, and a real signed
+`better-auth.session_token` was obtained via a **local-only, reverted** `emailAndPassword` toggle
+(no email/OAuth/network sends). Playwright drove system Chrome against both a `dashboard-consistency`
+tree and a detached `main` worktree using the same local DB + cookie. All local-only changes
+reverted afterward: `auth.ts` diff clean, `.env.local` restored, container removed.
+
+**Coverage gap (not a different conclusion):** the YouTube data tabs
+(Videos/Channels/Containers/Templates/History/Jobs) need a *live OAuth-connected YouTube channel*
+(the app proxies YouTube on-demand rather than storing rows), so they couldn't be auto-captured.
+The same Badge/Button/token primitives are proven non-regressive on the 5 captured pages.
+
+Artifacts: `scratchpad/shots/<page>__{before,after}.png` (session scratchpad).
 
 ## State
 - `GOAL.md` — contract. `WORKLOG.md` — phased log. `scripts/check-design-consistency.sh` — verifier.

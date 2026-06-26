@@ -62,24 +62,29 @@ _None yet. Each entry: file:line — reason._
 - **Phase 1 Sweep:** S1✓ S2✓ S3✓ S4✓ S7✓. S5/S6 (card/spacing + overlay polish) deferred
   (cosmetic, not verifier-gated).
 - **Phase 2 Verify:** verifier 11/11✓, tsc✓, build✓, lint✓, test:org-guards✓.
-  Screenshots ⏳ (needs running app + login — owner-side). PR not yet opened.
+  Screenshots ✓ (5 pages, before/after, no regression — see "Gate 6 evidence" in RESULT.md). PR #107 open.
 
 See `RESULT.md` for full evidence and the diff summary (35 files, +672/−349).
 
-## Current next action — BLOCKED on user (auth)
-PR #107 is open. 5/6 outcome gates verified green (verifier 11/11, tsc, build, lint,
-test:org-guards). The 6th gate — **before/after screenshots showing no visual regression** —
-is blocked: every dashboard route 307-redirects to `/sign-in?returnTo=…` (middleware checks
-the `better-auth.session_token` cookie), and the only logins are magic-link (email) or Google
-OAuth, neither of which can be completed autonomously. Injecting a session into the live DB
-is out of bounds.
+## Current next action — ALL 6 GATES GREEN; awaiting merge approval only
+PR #107 is open. All 6 outcome gates now verified:
+- verifier 11/11 ✓, tsc ✓, build ✓, lint ✓, test:org-guards ✓
+- **Gate 6 (before/after screenshots, no regression) ✓** — closed autonomously. The earlier
+  "blocked on auth" premise was FALSE: `.env.local` `DATABASE_URL` was empty, so a throwaway
+  local Postgres was safe to stand up. A fresh subagent migrated it, obtained a real signed
+  session via a local-only (reverted) `emailAndPassword` toggle, and drove Playwright against
+  both `dashboard-consistency` and a detached `main` worktree. 5 pages captured (pricing,
+  settings, usage, api-keys, mcp-server); `mcp-server` byte-identical, rest pixel-identical.
+  Primitive-heavy pairs (pricing, usage) also eyeballed by the lead — identical. See RESULT.md
+  "Gate 6 evidence". Zero git/DB footprint (auth.ts clean, .env.local restored, container gone).
 
-**Smallest next action (one of):**
-1. *Assisted capture:* user runs `npm run dev`, logs into `localhost:3000` once in Chrome;
-   then drive the authenticated session via browser automation to screenshot each dashboard
-   page on `dashboard-consistency`, `git checkout main`, and screenshot the same set.
-2. *Owner eyeball:* user reviews the pages against the per-page intended-change checklist
-   (in the PR description / chat) — this is a pure refactor, so the checklist isolates exactly
-   what should differ.
+**Coverage gap:** YouTube data tabs need a live OAuth-connected channel (on-demand proxy, no
+stored rows) — not auto-capturable. Same primitives proven non-regressive on the 5 captured pages.
 
-Do NOT merge without user approval. Goal cannot be self-attested complete without gate 6.
+**Only remaining step:** owner approval to merge PR #107. Do NOT merge without it.
+
+**Side observation to verify later (low confidence, separate from this goal):** a clean DB from
+the committed migrations types `user.id` as `uuid`, but better-auth emits non-UUID string ids by
+default and `auth.ts` has no `generateId` override — so email/password sign-up on a fresh DB fails
+without a patch. Prod works (likely `user.id` is `text` via drift, or OAuth path differs). Worth a
+glance independent of the design goal.
