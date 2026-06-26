@@ -66,5 +66,20 @@ _None yet. Each entry: file:line — reason._
 
 See `RESULT.md` for full evidence and the diff summary (35 files, +672/−349).
 
-## Current next action
-Visual parity screenshots, then open PR (do NOT merge without approval).
+## Current next action — BLOCKED on user (auth)
+PR #107 is open. 5/6 outcome gates verified green (verifier 11/11, tsc, build, lint,
+test:org-guards). The 6th gate — **before/after screenshots showing no visual regression** —
+is blocked: every dashboard route 307-redirects to `/sign-in?returnTo=…` (middleware checks
+the `better-auth.session_token` cookie), and the only logins are magic-link (email) or Google
+OAuth, neither of which can be completed autonomously. Injecting a session into the live DB
+is out of bounds.
+
+**Smallest next action (one of):**
+1. *Assisted capture:* user runs `npm run dev`, logs into `localhost:3000` once in Chrome;
+   then drive the authenticated session via browser automation to screenshot each dashboard
+   page on `dashboard-consistency`, `git checkout main`, and screenshot the same set.
+2. *Owner eyeball:* user reviews the pages against the per-page intended-change checklist
+   (in the PR description / chat) — this is a pure refactor, so the checklist isolates exactly
+   what should differ.
+
+Do NOT merge without user approval. Goal cannot be self-attested complete without gate 6.
