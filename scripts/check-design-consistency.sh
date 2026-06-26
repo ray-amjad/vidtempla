@@ -16,7 +16,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../nextjs/src" || { echo "cannot cd into nextjs/src"; exit 2; }
 
 # In-scope dashboard paths (space-separated, used as grep roots).
-DASH="components/youtube components/jobs components/billing \
+DASH="components/youtube components/jobs components/billing components/views \
       components/dashboard-sidebar.tsx components/layout/DashboardLayout.tsx \
       pages/dashboard pages/org"
 # Adoption checks may match a primitive used ANYWHERE in the app.
