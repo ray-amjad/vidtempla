@@ -361,7 +361,7 @@ export default function EditContainerModal({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              <AlertTriangle className="h-5 w-5 text-warning" />
               Videos edited on YouTube
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">

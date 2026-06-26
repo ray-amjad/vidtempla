@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { useUser } from '@/hooks/useUser';
 import { ExternalLink } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
@@ -136,21 +137,24 @@ export default function SettingsPage() {
                 <>
                   <div className="flex items-center justify-between py-2">
                     <span className="font-medium">Current Plan</span>
-                    <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-sm font-medium capitalize">
+                    <Badge variant="success" className="capitalize">
                       {currentPlan?.planTier || 'Free'}
-                    </span>
+                    </Badge>
                   </div>
 
                   {currentPlan?.status && (
                     <div className="flex items-center justify-between py-2">
                       <span className="font-medium">Status</span>
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium capitalize ${
-                        currentPlan.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
-                        currentPlan.status === 'canceled' ? 'bg-red-100 text-red-700' :
-                        'bg-yellow-100 text-yellow-700'
-                      }`}>
+                      <Badge
+                        variant={
+                          currentPlan.status === 'active' ? 'success' :
+                          currentPlan.status === 'canceled' ? 'destructive' :
+                          'warning'
+                        }
+                        className="capitalize"
+                      >
                         {currentPlan.status}
-                      </span>
+                      </Badge>
                     </div>
                   )}
 
@@ -164,8 +168,8 @@ export default function SettingsPage() {
                   )}
 
                   {currentPlan?.cancelAtPeriodEnd && (
-                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                      <p className="text-sm text-yellow-800">
+                    <div className="p-3 bg-warning/10 border border-warning/30 rounded-md">
+                      <p className="text-sm text-warning">
                         Your subscription will be canceled at the end of the current billing period.
                       </p>
                     </div>
@@ -203,7 +207,8 @@ export default function SettingsPage() {
                 <Button
                   onClick={handleManageSubscription}
                   disabled={portalLoading}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-500"
+                  variant="success"
+                  className="flex-1"
                 >
                   {portalLoading ? (
                     <>

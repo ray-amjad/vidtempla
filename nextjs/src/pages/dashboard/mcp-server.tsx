@@ -76,7 +76,7 @@ export default function McpServerPage() {
                     onClick={() => copyToClipboard(SERVER_URL, 'url')}
                   >
                     {copiedField === 'url' ? (
-                      <Check className="h-4 w-4 text-emerald-600" />
+                      <Check className="h-4 w-4 text-success" />
                     ) : (
                       <Copy className="h-4 w-4" />
                     )}
@@ -106,7 +106,7 @@ export default function McpServerPage() {
                   onClick={() => copyToClipboard(MCP_COMMAND, 'command')}
                 >
                   {copiedField === 'command' ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <Check className="h-3.5 w-3.5 text-success" />
                   ) : (
                     <Copy className="h-3.5 w-3.5" />
                   )}

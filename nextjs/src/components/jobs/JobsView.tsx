@@ -74,14 +74,14 @@ function JobStatusBadge({ status }: { status: JobStatus }) {
   }
   if (status === 'failed') {
     return (
-      <Badge variant="outline" className="border-amber-600/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
+      <Badge variant="warning">
         <AlertTriangle className="h-3 w-3 mr-1" />
         Completed with errors
       </Badge>
     );
   }
   return (
-    <Badge variant="outline" className="border-green-600/40 bg-green-500/10 text-green-700 dark:text-green-400">
+    <Badge variant="success">
       <CheckCircle2 className="h-3 w-3 mr-1" />
       Completed
     </Badge>
@@ -92,7 +92,7 @@ function ItemStatusBadge({ status }: { status: string }) {
   switch (status) {
     case 'succeeded':
       return (
-        <Badge variant="outline" className="border-green-600/40 bg-green-500/10 text-green-700 dark:text-green-400">
+        <Badge variant="success">
           <CheckCircle2 className="h-3 w-3 mr-1" />
           Done
         </Badge>
@@ -107,7 +107,7 @@ function ItemStatusBadge({ status }: { status: string }) {
       );
     case 'retry_scheduled':
       return (
-        <Badge variant="outline" className="border-amber-600/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
+        <Badge variant="warning">
           Retrying
         </Badge>
       );

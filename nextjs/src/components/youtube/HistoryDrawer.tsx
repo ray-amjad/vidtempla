@@ -58,7 +58,7 @@ function SourceBadge({ source }: { source: string | null }) {
   const config: Record<string, { label: string; className: string }> = {
     initial_sync: { label: 'Sync', className: 'bg-muted text-muted-foreground border-muted' },
     template_push: { label: 'Template', className: 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-600/20' },
-    manual_youtube_edit: { label: 'Edited on YouTube', className: 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-600/20' },
+    manual_youtube_edit: { label: 'Edited on YouTube', className: 'bg-warning/10 text-warning border-warning/20' },
     revert: { label: 'Revert', className: 'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-600/20' },
   };
   const c = config[source];
@@ -194,11 +194,11 @@ export default function HistoryDrawer({
         <div className="mt-6 space-y-4">
           {/* Drift banner */}
           {drifted && (
-            <div className="rounded-lg border border-yellow-600/20 bg-yellow-500/10 p-4 space-y-3">
+            <div className="rounded-lg border border-warning/20 bg-warning/10 p-4 space-y-3">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+                <AlertTriangle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium text-yellow-700 dark:text-yellow-400">
+                  <p className="font-medium text-warning">
                     Drift detected {currentVideo?.driftDetectedAt ? timeAgo(currentVideo.driftDetectedAt) : ''}
                   </p>
                   <p className="text-sm text-muted-foreground mt-1">
@@ -209,7 +209,7 @@ export default function HistoryDrawer({
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="border-yellow-600/30">
+                  <Button variant="outline" size="sm" className="border-warning/30">
                     Resolve drift
                     <ChevronDown className="ml-1 h-3 w-3" />
                   </Button>
@@ -251,7 +251,7 @@ export default function HistoryDrawer({
                     <AlertDialogTitle>Keep YouTube edit?</AlertDialogTitle>
                     <AlertDialogDescription className="space-y-2">
                       <p>This will preserve the description currently on YouTube.</p>
-                      <div className="rounded-md border border-yellow-600/20 bg-yellow-600/10 p-3 space-y-1 text-sm">
+                      <div className="rounded-md border border-warning/20 bg-warning/10 p-3 space-y-1 text-sm">
                         <ul className="list-disc pl-6 space-y-1">
                           <li>Video will be removed from its container</li>
                           {variables && variables.length > 0 && (
@@ -318,7 +318,7 @@ export default function HistoryDrawer({
                   key={version.id}
                   className={`border rounded-lg p-4 ${
                     isCurrent ? 'border-primary bg-primary/5' : 'border-border'
-                  } ${isManualEdit ? 'border-l-4 border-l-yellow-500' : ''}`}
+                  } ${isManualEdit ? 'border-l-4 border-l-warning' : ''}`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
@@ -367,8 +367,8 @@ export default function HistoryDrawer({
                                 </p>
 
                                 {currentVideo?.container && (
-                                  <div className="rounded-md border border-yellow-600/20 bg-yellow-600/10 p-3 space-y-2">
-                                    <p className="font-semibold text-yellow-600 dark:text-yellow-500">
+                                  <div className="rounded-md border border-warning/20 bg-warning/10 p-3 space-y-2">
+                                    <p className="font-semibold text-warning">
                                       Warning:
                                     </p>
                                     <ul className="list-disc pl-6 space-y-1 text-sm">

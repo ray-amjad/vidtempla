@@ -39,7 +39,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Spinner } from "@/components/ui/spinner";
-import { Plus, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Edit, Trash2 } from 'lucide-react';
 import UpdateImpactDialog from './UpdateImpactDialog';
 
 type Template = RouterOutputs['dashboard']['youtube']['templates']['list'][number];
@@ -239,7 +239,7 @@ export default function TemplatesTab() {
                         size="sm"
                         onClick={() => openEditDialog(template)}
                       >
-                        <Edit2 className="h-4 w-4" />
+                        <Edit className="h-4 w-4" />
                       </Button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>

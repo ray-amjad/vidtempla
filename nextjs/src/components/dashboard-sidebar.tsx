@@ -12,6 +12,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { appConfig } from "@/config/app";
+import { formatNumber } from "@/lib/format";
 import { useUser } from "@/hooks/useUser";
 import { api, setOrganizationId } from "@/utils/api";
 import {
@@ -374,8 +375,8 @@ export default function DashboardSidebar() {
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Credits</span>
                 <span>
-                  {credits.balance.toLocaleString()} /{" "}
-                  {credits.monthlyAllocation.toLocaleString()}
+                  {formatNumber(credits.balance)} /{" "}
+                  {formatNumber(credits.monthlyAllocation)}
                 </span>
               </div>
               <Progress

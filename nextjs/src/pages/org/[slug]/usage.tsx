@@ -30,8 +30,8 @@ import {
 import { Input } from '@/components/ui/input';
 
 function statusColor(code: number) {
-  if (code >= 200 && code < 300) return 'text-green-600';
-  if (code >= 400 && code < 500) return 'text-amber-600';
+  if (code >= 200 && code < 300) return 'text-success';
+  if (code >= 400 && code < 500) return 'text-warning';
   return 'text-red-600';
 }
 
@@ -119,12 +119,12 @@ export default function OrgUsagePage() {
                   </CardContent>
                 </Card>
                 {credits && (
-                  <Card className={creditFull ? 'border-emerald-500' : creditLow ? 'border-red-500' : undefined}>
+                  <Card className={creditFull ? 'border-success' : creditLow ? 'border-destructive' : undefined}>
                     <CardContent className="pt-6">
                       {creditFull ? (
                         <>
                           <p className="text-sm text-muted-foreground">Credits</p>
-                          <p className="text-2xl font-bold text-emerald-600">Full</p>
+                          <p className="text-2xl font-bold text-success">Full</p>
                         </>
                       ) : (
                         <>

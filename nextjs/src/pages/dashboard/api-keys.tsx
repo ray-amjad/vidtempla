@@ -56,6 +56,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 
 export default function ApiKeysPage() {
   const { toast } = useToast();
@@ -153,7 +154,7 @@ export default function ApiKeysPage() {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
-                <BookOpen className="h-5 w-5 text-emerald-600" />
+                <BookOpen className="h-5 w-5 text-success" />
                 <CardTitle className="text-lg">API Documentation</CardTitle>
               </div>
               <CardDescription>
@@ -178,7 +179,7 @@ export default function ApiKeysPage() {
                 else setCreateDialogOpen(true);
               }}>
                 <DialogTrigger asChild>
-                  <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500">
+                  <Button size="sm" variant="success">
                     <Plus className="mr-2 h-4 w-4" />
                     Create Key
                   </Button>
@@ -193,8 +194,8 @@ export default function ApiKeysPage() {
                         </DialogDescription>
                       </DialogHeader>
                       <div className="space-y-4">
-                        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                          <p className="text-sm text-yellow-800 font-medium">
+                        <div className="p-3 bg-warning/10 border border-warning/30 rounded-md">
+                          <p className="text-sm text-warning font-medium">
                             Make sure to copy your API key. You will not be able to see it again.
                           </p>
                         </div>
@@ -210,7 +211,7 @@ export default function ApiKeysPage() {
                             onClick={handleCopyKey}
                           >
                             {copied ? (
-                              <Check className="h-4 w-4 text-emerald-600" />
+                              <Check className="h-4 w-4 text-success" />
                             ) : (
                               <Copy className="h-4 w-4" />
                             )}
@@ -282,7 +283,7 @@ export default function ApiKeysPage() {
                         <Button
                           onClick={handleCreateKey}
                           disabled={!newKeyName.trim() || createKeyMutation.isPending}
-                          className="bg-emerald-600 hover:bg-emerald-500"
+                          variant="success"
                         >
                           {createKeyMutation.isPending ? (
                             <>
@@ -328,9 +329,9 @@ export default function ApiKeysPage() {
                         </TableCell>
                         <TableCell>
                           {key.permission === 'read-write' ? (
-                            <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                            <Badge variant="warning">
                               Read & Write
-                            </span>
+                            </Badge>
                           ) : (
                             <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20">
                               Read only

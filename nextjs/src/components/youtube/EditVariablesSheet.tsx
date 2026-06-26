@@ -390,7 +390,7 @@ export default function EditVariablesSheet({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              <AlertTriangle className="h-5 w-5 text-warning" />
               This video was edited on YouTube
               {driftInfo?.driftDetectedAt && (
                 <span className="text-sm font-normal text-muted-foreground">

@@ -252,7 +252,7 @@ export default function VideosTab() {
                   return (
                   <TableRow
                     key={video.id}
-                    className={drifted ? 'bg-yellow-500/5' : undefined}
+                    className={drifted ? 'bg-warning/5' : undefined}
                   >
                     <TableCell>
                       <a
@@ -284,8 +284,8 @@ export default function VideosTab() {
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Badge
-                                  variant="outline"
-                                  className="w-fit border-yellow-600/40 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400"
+                                  variant="warning"
+                                  className="w-fit"
                                 >
                                   <AlertTriangle className="h-3 w-3 mr-1" />
                                   Edited on YouTube

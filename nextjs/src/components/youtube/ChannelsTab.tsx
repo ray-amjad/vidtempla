@@ -21,7 +21,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Unplug, RefreshCw, Plus, ArrowUpRight, AlertTriangle, Link2 } from 'lucide-react';
 import DisconnectConfirmDialog from './DisconnectConfirmDialog';
 import Image from 'next/image';
-import { DateTime } from 'luxon';
+import { formatDateTime, formatNumber } from '@/lib/format';
 import Link from 'next/link';
 export default function ChannelsTab() {
   const { toast } = useToast();
@@ -56,9 +56,7 @@ export default function ChannelsTab() {
 
   const formatTimestamp = (timestamp: string | Date | null) => {
     if (!timestamp) return 'Never';
-
-    const dt = timestamp instanceof Date ? DateTime.fromJSDate(timestamp) : DateTime.fromISO(timestamp);
-    return dt.toLocaleString(DateTime.DATETIME_MED);
+    return formatDateTime(timestamp);
   };
 
   const handleConnect = () => {
@@ -226,7 +224,7 @@ export default function ChannelsTab() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      {channel.subscriberCount?.toLocaleString() || '—'}
+                      {channel.subscriberCount != null ? formatNumber(channel.subscriberCount) : '—'}
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">
