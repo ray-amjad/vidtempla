@@ -44,6 +44,7 @@ import { Play, Edit, History, AlertTriangle } from 'lucide-react';
 import EditVariablesSheet from './EditVariablesSheet';
 import HistoryDrawer from './HistoryDrawer';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
+import { formatDate, formatDateTime } from '@/lib/format';
 
 type VideoWithRelations = RouterOutputs['dashboard']['youtube']['videos']['list']['data'][number];
 
@@ -294,7 +295,7 @@ export default function VideosTab() {
                               <TooltipContent>
                                 Description was edited outside VidTempla on{' '}
                                 {video.driftDetectedAt
-                                  ? new Date(video.driftDetectedAt).toLocaleString()
+                                  ? formatDateTime(video.driftDetectedAt)
                                   : 'an unknown date'}
                                 . Click History to review.
                               </TooltipContent>
@@ -328,7 +329,7 @@ export default function VideosTab() {
                     </TableCell>
                     <TableCell>
                       {video.publishedAt
-                        ? new Date(video.publishedAt).toLocaleDateString()
+                        ? formatDate(video.publishedAt)
                         : '—'}
                     </TableCell>
                     <TableCell className="text-right">

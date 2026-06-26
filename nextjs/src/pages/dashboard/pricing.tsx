@@ -164,10 +164,8 @@ export default function PricingPage() {
       <Head>
         <title>Pricing | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout title="Pricing Plans">
         <div className="space-y-6">
-          <h2 className="text-2xl font-bold">Pricing Plans</h2>
-
           <div className="grid md:grid-cols-3 gap-6">
             {pricingTiers.map((tier) => {
               const tierName = tier.name.toLowerCase() as PlanTier;

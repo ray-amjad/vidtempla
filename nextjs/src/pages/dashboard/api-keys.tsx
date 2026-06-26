@@ -57,6 +57,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { formatDate } from '@/lib/format';
 
 export default function ApiKeysPage() {
   const { toast } = useToast();
@@ -103,11 +104,7 @@ export default function ApiKeysPage() {
 
   const formatShortDate = (dateString: string | Date | null) => {
     if (!dateString) return 'Never';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
+    return formatDate(dateString);
   };
 
   const handleCreateKey = async () => {

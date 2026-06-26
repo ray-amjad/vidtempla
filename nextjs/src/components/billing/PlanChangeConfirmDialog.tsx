@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { AlertTriangle, ArrowUp, ArrowDown, Check, X } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import type { PlanTier } from '@/lib/stripe';
+import { formatDateLong } from '@/lib/format';
 
 interface PlanChangeConfirmDialogProps {
   open: boolean;
@@ -93,11 +94,7 @@ export default function PlanChangeConfirmDialog({
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'your next billing date';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+    return formatDateLong(dateString);
   };
 
   return (

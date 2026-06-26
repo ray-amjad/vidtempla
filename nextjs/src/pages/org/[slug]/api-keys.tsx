@@ -58,6 +58,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { formatDate } from '@/lib/format';
 
 export default function OrgApiKeysPage() {
   const { toast } = useToast();
@@ -104,11 +105,7 @@ export default function OrgApiKeysPage() {
 
   const formatShortDate = (dateString: string | Date | null) => {
     if (!dateString) return 'Never';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
+    return formatDate(dateString);
   };
 
   const handleCreateKey = async () => {

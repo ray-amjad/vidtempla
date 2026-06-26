@@ -128,11 +128,7 @@ function MembersContent() {
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Members</h1>
-          <p className="text-muted-foreground text-sm">Manage your organization members and invitations</p>
-        </div>
+      <div className="flex items-center justify-end mb-6">
         {isAdmin && (
           <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
             <DialogTrigger asChild>
@@ -269,7 +265,7 @@ export default function OrgMembersPage() {
       <Head>
         <title>Members | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout title="Members" description="Manage your organization members and invitations">
         <MembersContent />
       </DashboardLayout>
     </OrganizationProvider>

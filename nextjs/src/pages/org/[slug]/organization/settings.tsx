@@ -131,11 +131,6 @@ function OrgSettingsContent() {
 
   return (
     <div className="space-y-8 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-bold">Organization Settings</h1>
-        <p className="text-muted-foreground text-sm">Manage your organization details</p>
-      </div>
-
       {/* Name */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Organization Name</label>
@@ -210,7 +205,7 @@ export default function OrgSettingsPage() {
       <Head>
         <title>Organization Settings | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout title="Organization Settings" description="Manage your organization details">
         <OrgSettingsContent />
       </DashboardLayout>
     </OrganizationProvider>

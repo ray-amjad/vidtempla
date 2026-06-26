@@ -33,6 +33,7 @@ import { Button } from '@/components/ui/button';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
+import { formatDateTime } from '@/lib/format';
 
 type JobSummary = RouterOutputs['dashboard']['jobs']['list']['data'][number];
 
@@ -308,7 +309,7 @@ export default function JobsView() {
                     {progressSummary(job.totalVideos, job.counts)}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {new Date(job.createdAt).toLocaleString()}
+                    {formatDateTime(job.createdAt)}
                   </TableCell>
                   <TableCell>
                     <JobStatusBadge status={job.status} />

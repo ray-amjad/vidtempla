@@ -8,6 +8,7 @@ import { api } from '@/utils/api';
 import type { RouterOutputs } from '@/utils/api';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { formatDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import {
   Sheet,
@@ -332,7 +333,7 @@ export default function HistoryDrawer({
                         <SourceBadge source={version.source} />
                       </div>
                       <p className="text-sm text-muted-foreground mt-1">
-                        {new Date(version.createdAt).toLocaleString()}
+                        {formatDateTime(version.createdAt)}
                       </p>
                     </div>
 
@@ -363,7 +364,7 @@ export default function HistoryDrawer({
                               <AlertDialogDescription className="space-y-3">
                                 <p>
                                   This will restore the description from{' '}
-                                  {new Date(version.createdAt).toLocaleString()}.
+                                  {formatDateTime(version.createdAt)}.
                                 </p>
 
                                 {currentVideo?.container && (

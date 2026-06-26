@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
+import { formatDate, formatDateTime, formatDateRange, formatNumber } from '@/lib/format';
 
 function statusColor(code: number) {
   if (code >= 200 && code < 300) return 'text-success';
@@ -57,30 +58,9 @@ export default function UsagePage() {
 
   const historyRows = history?.pages.flatMap((p) => p.items) ?? [];
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-  };
+  const formatTimestamp = (date: Date | string) => formatDateTime(date);
 
-  const formatTimestamp = (date: Date | string) => {
-    const d = typeof date === 'string' ? new Date(date) : date;
-    return d.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  };
-
-  const formatPeriod = (start: string, end: string) => {
-    const s = new Date(start);
-    const e = new Date(end);
-    const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
-    return `${s.toLocaleDateString('en-US', opts)} \u2013 ${e.toLocaleDateString('en-US', opts)}`;
-  };
+  const formatPeriod = (start: string, end: string) => formatDateRange(start, end);
 
   const creditPercent = credits ? (credits.balance / credits.monthlyAllocation) * 100 : 100;
   const creditFull = credits && credits.balance >= credits.monthlyAllocation;
@@ -105,7 +85,7 @@ export default function UsagePage() {
                 <Card>
                   <CardContent className="pt-6">
                     <p className="text-sm text-muted-foreground">Total Requests</p>
-                    <p className="text-2xl font-bold">{usage.totals.requests.toLocaleString()}</p>
+                    <p className="text-2xl font-bold">{formatNumber(usage.totals.requests)}</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {formatPeriod(usage.periodStart, usage.periodEnd)}
                     </p>
@@ -114,7 +94,7 @@ export default function UsagePage() {
                 <Card>
                   <CardContent className="pt-6">
                     <p className="text-sm text-muted-foreground">YouTube Quota Used</p>
-                    <p className="text-2xl font-bold">{usage.totals.quotaUnits.toLocaleString()}</p>
+                    <p className="text-2xl font-bold">{formatNumber(usage.totals.quotaUnits)}</p>
                   </CardContent>
                 </Card>
                 {credits && (
@@ -129,7 +109,7 @@ export default function UsagePage() {
                         <>
                           <p className="text-sm text-muted-foreground">Credits Remaining</p>
                           <p className={`text-2xl font-bold ${creditLow ? 'text-red-600' : ''}`}>
-                            {credits.balance.toLocaleString()} / {credits.monthlyAllocation.toLocaleString()}
+                            {formatNumber(credits.balance)} / {formatNumber(credits.monthlyAllocation)}
                           </p>
                           <p className="text-xs text-muted-foreground mt-1">
                             Resets {formatDate(credits.periodEnd)}
@@ -160,8 +140,8 @@ export default function UsagePage() {
                         {usage.daily.map((day) => (
                           <TableRow key={day.date}>
                             <TableCell>{formatDate(day.date)}</TableCell>
-                            <TableCell className="text-right">{day.requestCount.toLocaleString()}</TableCell>
-                            <TableCell className="text-right">{day.quotaUnits.toLocaleString()}</TableCell>
+                            <TableCell className="text-right">{formatNumber(day.requestCount)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(day.quotaUnits)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -191,8 +171,8 @@ export default function UsagePage() {
                         {usage.byEndpoint.map((row) => (
                           <TableRow key={row.endpoint}>
                             <TableCell className="font-mono text-sm">{row.endpoint}</TableCell>
-                            <TableCell className="text-right">{row.requests.toLocaleString()}</TableCell>
-                            <TableCell className="text-right">{row.quotaUnits.toLocaleString()}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.quotaUnits)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -226,8 +206,8 @@ export default function UsagePage() {
                                 row.keyName
                               )}
                             </TableCell>
-                            <TableCell className="text-right">{row.requests.toLocaleString()}</TableCell>
-                            <TableCell className="text-right">{row.quotaUnits.toLocaleString()}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.requests)}</TableCell>
+                            <TableCell className="text-right">{formatNumber(row.quotaUnits)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

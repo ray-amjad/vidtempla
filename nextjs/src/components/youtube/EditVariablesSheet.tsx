@@ -36,6 +36,7 @@ import { useToast } from '@/hooks/use-toast';
 import { ChevronDown, AlertTriangle } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { buildDescription } from '@/utils/templateParser';
+import { formatDate } from '@/lib/format';
 
 type VideoVariableData = RouterOutputs['dashboard']['youtube']['videos']['getVariables'];
 type VideoVariable = NonNullable<VideoVariableData['variables']>[number];
@@ -394,7 +395,7 @@ export default function EditVariablesSheet({
               This video was edited on YouTube
               {driftInfo?.driftDetectedAt && (
                 <span className="text-sm font-normal text-muted-foreground">
-                  on {new Date(driftInfo.driftDetectedAt).toLocaleDateString()}
+                  on {formatDate(driftInfo.driftDetectedAt)}
                 </span>
               )}
             </AlertDialogTitle>

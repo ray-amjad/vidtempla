@@ -19,6 +19,7 @@ import { api } from '@/utils/api';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
+import { formatDateLong } from '@/lib/format';
 
 export default function OrgSettingsPage() {
   const { toast } = useToast();
@@ -80,13 +81,7 @@ export default function OrgSettingsPage() {
     }
   };
 
-  const formatDate = (dateString: string | Date) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-  };
+  const formatDate = (dateString: string | Date) => formatDateLong(dateString);
 
   return (
     <OrganizationProvider>
