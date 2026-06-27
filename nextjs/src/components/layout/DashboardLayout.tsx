@@ -125,12 +125,15 @@ export default function DashboardLayout({
   breadcrumbs,
   title,
   description,
+  headerActions,
 }: {
   children: React.ReactNode;
   breadcrumbs?: BreadcrumbItemType[];
   /** Optional standard page header rendered above the content. */
   title?: string;
   description?: string;
+  /** Optional actions rendered on the right side of the breadcrumb header row. */
+  headerActions?: React.ReactNode;
 }) {
   return (
     <RootLayout>
@@ -141,6 +144,9 @@ export default function DashboardLayout({
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 h-4" />
             <DashboardBreadcrumb customBreadcrumbs={breadcrumbs} />
+            {headerActions && (
+              <div className="ml-auto flex items-center gap-2">{headerActions}</div>
+            )}
           </header>
           <main className="flex-1 p-4 md:p-8 w-full max-w-7xl mx-auto">
             {title && (
