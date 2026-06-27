@@ -126,44 +126,47 @@ function MembersContent() {
     return "outline" as const;
   };
 
-  return (
-    <div className="space-y-6">
-      {isAdmin && (
-        <div className="flex items-center justify-end">
-          <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-            <DialogTrigger asChild>
-              <Button><UserPlus className="mr-2 h-4 w-4" />Invite Member</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Invite a new member</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 pt-4">
-                <Input
-                  placeholder="Email address"
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                />
-                <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as "member" | "admin")}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="member">Member</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button onClick={handleInvite} disabled={inviting || !inviteEmail} className="w-full">
-                  {inviting && <Spinner className="mr-2 h-4 w-4" />}
-                  Send Invitation
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
+  const inviteAction = isAdmin ? (
+    <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><UserPlus className="mr-2 h-4 w-4" />Invite Member</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Invite a new member</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 pt-4">
+          <Input
+            placeholder="Email address"
+            type="email"
+            value={inviteEmail}
+            onChange={(e) => setInviteEmail(e.target.value)}
+          />
+          <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as "member" | "admin")}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="member">Member</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={handleInvite} disabled={inviting || !inviteEmail} className="w-full">
+            {inviting && <Spinner className="mr-2 h-4 w-4" />}
+            Send Invitation
+          </Button>
         </div>
-      )}
+      </DialogContent>
+    </Dialog>
+  ) : null;
 
+  return (
+    <DashboardLayout
+      title="Members"
+      description="Manage your organization members and invitations"
+      headerActions={inviteAction}
+    >
+      <div className="space-y-6">
       {/* Members list */}
       <div className="border rounded-lg divide-y">
         {members.map((m: any) => (
@@ -255,7 +258,8 @@ function MembersContent() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }
 
@@ -265,9 +269,7 @@ export default function OrgMembersPage() {
       <Head>
         <title>Members | VidTempla</title>
       </Head>
-      <DashboardLayout title="Members" description="Manage your organization members and invitations">
-        <MembersContent />
-      </DashboardLayout>
+      <MembersContent />
     </OrganizationProvider>
   );
 }
