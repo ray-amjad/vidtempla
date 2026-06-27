@@ -139,7 +139,7 @@ export default function PlanChangeConfirmDialog({
                       </ul>
                     </div>
                   )}
-                  <div className="bg-muted p-3 rounded-md">
+                  <div className="bg-muted p-4 rounded-lg">
                     <p className="text-sm">
                       <span className="font-medium">Today&apos;s charge:</span>{' '}
                       <span className="text-success font-semibold">~{proratedAmountFormatted}</span>
@@ -169,7 +169,7 @@ export default function PlanChangeConfirmDialog({
                       </ul>
                     </div>
                   )}
-                  <div className="bg-warning/10 border border-warning/30 p-3 rounded-md">
+                  <div className="bg-warning/10 border border-warning/30 p-4 rounded-lg">
                     <p className="text-sm text-warning">
                       {isDowngradeToFree ? (
                         <>

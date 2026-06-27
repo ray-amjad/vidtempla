@@ -61,6 +61,8 @@ export default function AdminPage() {
   return (
     <DashboardLayout
       breadcrumbs={[{ label: "Admin" }]}
+      title="Admin"
+      description="Platform overview and recent activity"
     >
       <Head>
         <title>Admin | VidTempla</title>
@@ -71,7 +73,7 @@ export default function AdminPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-6">
           <div className="grid gap-4 md:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

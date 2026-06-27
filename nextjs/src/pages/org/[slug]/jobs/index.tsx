@@ -14,7 +14,10 @@ export default function OrgJobsPage() {
       <Head>
         <title>Jobs | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout
+        title="Jobs"
+        description="Each YouTube description push is grouped into a job. Track live progress and review past pushes."
+      >
         <JobsView />
       </DashboardLayout>
     </OrganizationProvider>

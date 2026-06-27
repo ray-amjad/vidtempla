@@ -147,7 +147,10 @@ export default function ApiKeysView() {
       <Head>
         <title>API Keys | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout
+        title="API Keys"
+        description="Create and manage API keys for programmatic access to VidTempla."
+      >
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -192,7 +195,7 @@ export default function ApiKeysView() {
                         </DialogDescription>
                       </DialogHeader>
                       <div className="space-y-4">
-                        <div className="p-3 bg-warning/10 border border-warning/30 rounded-md">
+                        <div className="p-3 bg-warning/10 border border-warning/30 rounded-lg">
                           <p className="text-sm text-warning font-medium">
                             Make sure to copy your API key. You will not be able to see it again.
                           </p>
@@ -331,9 +334,9 @@ export default function ApiKeysView() {
                               Read & Write
                             </Badge>
                           ) : (
-                            <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20">
+                            <Badge variant="secondary">
                               Read only
-                            </span>
+                            </Badge>
                           )}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
@@ -343,7 +346,7 @@ export default function ApiKeysView() {
                           {key.expiresAt ? (
                             <span className={
                               new Date(key.expiresAt) < new Date()
-                                ? 'text-red-600'
+                                ? 'text-destructive'
                                 : ''
                             }>
                               {formatShortDate(key.expiresAt)}

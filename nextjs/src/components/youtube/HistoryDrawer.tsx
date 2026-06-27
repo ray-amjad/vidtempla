@@ -252,7 +252,7 @@ export default function HistoryDrawer({
                     <AlertDialogTitle>Keep YouTube edit?</AlertDialogTitle>
                     <AlertDialogDescription className="space-y-2">
                       <p>This will preserve the description currently on YouTube.</p>
-                      <div className="rounded-md border border-warning/20 bg-warning/10 p-3 space-y-1 text-sm">
+                      <div className="rounded-lg border border-warning/20 bg-warning/10 p-3 space-y-1 text-sm">
                         <ul className="list-disc pl-6 space-y-1">
                           <li>Video will be removed from its container</li>
                           {variables && variables.length > 0 && (
@@ -368,7 +368,7 @@ export default function HistoryDrawer({
                                 </p>
 
                                 {currentVideo?.container && (
-                                  <div className="rounded-md border border-warning/20 bg-warning/10 p-3 space-y-2">
+                                  <div className="rounded-lg border border-warning/20 bg-warning/10 p-3 space-y-2">
                                     <p className="font-semibold text-warning">
                                       Warning:
                                     </p>

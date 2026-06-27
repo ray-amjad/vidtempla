@@ -130,7 +130,7 @@ export default function ChannelsTab() {
     <Card>
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <CardTitle>YouTube Channels</CardTitle>
+          <CardTitle className="text-lg">YouTube Channels</CardTitle>
           <p className="text-sm text-muted-foreground mt-1">
             Connect your YouTube channels to manage video descriptions
           </p>

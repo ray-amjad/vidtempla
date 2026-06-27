@@ -145,7 +145,7 @@ export default function VideosTab() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Videos</CardTitle>
+        <CardTitle className="text-lg">Videos</CardTitle>
         <p className="text-sm text-muted-foreground mt-1">
           Manage your YouTube videos and assign them to containers
         </p>
@@ -270,7 +270,7 @@ export default function VideosTab() {
                       </a>
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-1.5">
+                      <div className="flex flex-col gap-2">
                         <a
                           href={youtubeWatchUrl(video.videoId)}
                           target="_blank"

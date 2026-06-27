@@ -451,18 +451,18 @@ export default function DashboardSidebar() {
                   <DropdownMenuItem
                     onClick={() => router.push(org ? `/org/${org.slug}/settings` : "/dashboard/settings")}
                   >
-                    <Settings className="mr-3 h-4 w-4" />
+                    <Settings className="mr-2 h-4 w-4" />
                     <span>Settings</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => router.push(org ? `/org/${org.slug}/pricing` : "/dashboard/pricing")}
                   >
-                    <CreditCard className="mr-3 h-4 w-4" />
+                    <CreditCard className="mr-2 h-4 w-4" />
                     <span>Billing</span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={signOut}>
-                    <LogOut className="mr-3 h-4 w-4" />
+                    <LogOut className="mr-2 h-4 w-4" />
                     <span>Log out</span>
                   </DropdownMenuItem>
                 </div>

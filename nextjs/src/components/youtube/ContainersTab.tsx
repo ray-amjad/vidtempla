@@ -124,7 +124,7 @@ export default function ContainersTab() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
-          <CardTitle>Containers</CardTitle>
+          <CardTitle className="text-lg">Containers</CardTitle>
           <p className="text-sm text-muted-foreground mt-1">
             Containers are collections of templates applied to videos
           </p>
@@ -256,7 +256,7 @@ export default function ContainersTab() {
               </div>
               <div>
                 <Label>Select Templates</Label>
-                <div className="border rounded-md p-3 space-y-2 max-h-60 overflow-y-auto">
+                <div className="border rounded-lg p-3 space-y-2 max-h-60 overflow-y-auto">
                   {templates && templates.length > 0 ? (
                     templates.map((template) => {
                       const orderIndex = formData.templateIds.indexOf(template.id);
@@ -290,7 +290,7 @@ export default function ContainersTab() {
                 </p>
 
                 {formData.templateIds.length > 0 && (
-                  <div className="mt-4 p-3 bg-muted rounded-md">
+                  <div className="mt-4 p-3 bg-muted rounded-lg">
                     <p className="text-sm font-medium mb-2">Template Order Preview:</p>
                     <ol className="text-sm space-y-1">
                       {formData.templateIds.map((templateId, index) => {

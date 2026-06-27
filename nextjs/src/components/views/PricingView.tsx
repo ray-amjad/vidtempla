@@ -7,6 +7,7 @@
 import Head from 'next/head';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Check } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
@@ -210,30 +211,26 @@ export default function PricingView() {
               return (
                 <Card
                   key={tier.name}
-                  className={`relative ${
+                  className={`relative flex flex-col ${
                     tier.highlighted
                       ? 'border-primary shadow-lg scale-105'
                       : 'border-border'
                   } ${isCurrentPlan ? 'border-primary border-2' : ''}`}
                 >
                   {tier.highlighted && !isCurrentPlan && (
-                    <div className="absolute -top-4 left-0 right-0 flex justify-center">
-                      <span className="bg-primary text-primary-foreground px-4 py-1 rounded-full text-sm font-medium">
-                        Most Popular
-                      </span>
+                    <div className="absolute -top-3 left-0 right-0 flex justify-center">
+                      <Badge>Most Popular</Badge>
                     </div>
                   )}
 
                   {isCurrentPlan && (
-                    <div className="absolute -top-4 left-0 right-0 flex justify-center">
-                      <span className="bg-primary text-primary-foreground px-4 py-1 rounded-full text-sm font-medium">
-                        Current Plan
-                      </span>
+                    <div className="absolute -top-3 left-0 right-0 flex justify-center">
+                      <Badge>Current Plan</Badge>
                     </div>
                   )}
 
-                  <CardHeader className="text-center pb-8">
-                    <CardTitle className="text-2xl">{tier.name}</CardTitle>
+                  <CardHeader className="text-center pb-6">
+                    <CardTitle className="text-lg">{tier.name}</CardTitle>
                     <CardDescription>{tier.description}</CardDescription>
                     <div className="mt-4">
                       <span className="text-4xl font-bold">{tier.price}</span>
@@ -241,7 +238,7 @@ export default function PricingView() {
                     </div>
                   </CardHeader>
 
-                  <CardContent className="space-y-4">
+                  <CardContent className="flex-1 space-y-4">
                     <ul className="space-y-3">
                       {tier.features.map((feature, index) => (
                         <li key={index} className="flex items-start gap-2">

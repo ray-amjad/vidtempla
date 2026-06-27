@@ -6,6 +6,13 @@ import { authClient } from "@/lib/auth-client";
 import { api, setOrganizationId } from "@/utils/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/router";
 import {
@@ -130,27 +137,38 @@ function OrgSettingsContent() {
   }
 
   return (
-    <div className="space-y-8 max-w-2xl">
+    <div className="space-y-6 max-w-2xl">
       {/* Name */}
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Organization Name</label>
-        <Input
-          value={orgName}
-          onChange={(e) => setOrgName(e.target.value)}
-        />
-        <Button onClick={handleSave} disabled={saving || !isDirty}>
-          {saving ? "Saving..." : "Save"}
-        </Button>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">General</CardTitle>
+          <CardDescription>Update your organization&apos;s name.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Organization Name</label>
+            <Input
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+            />
+          </div>
+          <Button onClick={handleSave} disabled={saving || !isDirty}>
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Danger zone */}
       {isOwner && (
-        <div className="border border-destructive/20 rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-destructive">Danger Zone</h2>
-          <p className="text-sm text-muted-foreground">
-            Deleting this organization is permanent and cannot be undone. All channels,
-            templates, containers, and API keys will be lost.
-          </p>
+        <Card className="border-destructive/20">
+          <CardHeader>
+            <CardTitle className="text-lg text-destructive">Danger Zone</CardTitle>
+            <CardDescription>
+              Deleting this organization is permanent and cannot be undone. All channels,
+              templates, containers, and API keys will be lost.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
           {isPaid && (
             <p className="text-sm text-destructive">
               Cancel your subscription before deleting this organization.{" "}
@@ -193,7 +211,8 @@ function OrgSettingsContent() {
           ) : (
             <Button variant="destructive" disabled>Delete Organization</Button>
           )}
-        </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
