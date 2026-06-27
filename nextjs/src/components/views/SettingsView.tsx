@@ -87,11 +87,14 @@ export default function SettingsView() {
       <Head>
         <title>Settings | VidTempla</title>
       </Head>
-      <DashboardLayout>
-        <div className="grid gap-6">
+      <DashboardLayout
+        title="Settings"
+        description="Manage your account, plan, and billing."
+      >
+        <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Account Information</CardTitle>
+              <CardTitle className="text-lg">Account Information</CardTitle>
               <CardDescription>
                 Your account details and contact information
               </CardDescription>
@@ -122,7 +125,7 @@ export default function SettingsView() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Plan Information</CardTitle>
+              <CardTitle className="text-lg">Plan Information</CardTitle>
               <CardDescription>
                 Your current subscription plan and usage
               </CardDescription>
@@ -168,7 +171,7 @@ export default function SettingsView() {
                   )}
 
                   {currentPlan?.cancelAtPeriodEnd && (
-                    <div className="p-3 bg-warning/10 border border-warning/30 rounded-md">
+                    <div className="p-3 bg-warning/10 border border-warning/30 rounded-lg">
                       <p className="text-sm text-warning">
                         Your subscription will be canceled at the end of the current billing period.
                       </p>

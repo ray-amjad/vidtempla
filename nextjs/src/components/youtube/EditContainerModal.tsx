@@ -254,7 +254,7 @@ export default function EditContainerModal({
             </p>
 
             {templateIds.length === 0 ? (
-              <div className="text-center py-8 border border-dashed rounded-md">
+              <div className="text-center py-8 border border-dashed rounded-lg">
                 <p className="text-muted-foreground text-sm">
                   No templates added yet. Add templates from the list below.
                 </p>
@@ -264,7 +264,7 @@ export default function EditContainerModal({
                 {templateIds.map((templateId, index) => (
                   <div
                     key={templateId}
-                    className="flex items-center gap-2 p-3 border rounded-md bg-background"
+                    className="flex items-center gap-2 p-3 border rounded-lg bg-background"
                   >
                     <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab" />
                     <span className="flex-1 font-medium">
@@ -305,7 +305,7 @@ export default function EditContainerModal({
           {availableTemplates.length > 0 && (
             <div>
               <Label>Add Templates</Label>
-              <div className="mt-2 border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto">
+              <div className="mt-2 border rounded-lg p-3 space-y-2 max-h-40 overflow-y-auto">
                 {availableTemplates.map((template) => (
                   <div
                     key={template.id}
@@ -323,7 +323,7 @@ export default function EditContainerModal({
           )}
 
           {templateIds.length > 0 && (
-            <div className="bg-muted p-3 rounded-md text-sm">
+            <div className="bg-muted p-3 rounded-lg text-sm">
               <p className="font-medium mb-1">Preview Order:</p>
               <div className="flex items-center gap-2 text-muted-foreground">
                 {templateIds.map((templateId, index) => (

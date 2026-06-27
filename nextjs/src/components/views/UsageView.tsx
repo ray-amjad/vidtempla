@@ -32,7 +32,7 @@ import { formatDate, formatDateTime, formatDateRange, formatNumber } from '@/lib
 function statusColor(code: number) {
   if (code >= 200 && code < 300) return 'text-success';
   if (code >= 400 && code < 500) return 'text-warning';
-  return 'text-red-600';
+  return 'text-destructive';
 }
 
 export default function UsageView({ showMembers = false }: { showMembers?: boolean }) {
@@ -71,7 +71,10 @@ export default function UsageView({ showMembers = false }: { showMembers?: boole
       <Head>
         <title>Usage | VidTempla</title>
       </Head>
-      <DashboardLayout>
+      <DashboardLayout
+        title="Usage"
+        description="API requests, YouTube quota, and credit usage for the current period."
+      >
         <div className="space-y-6">
           {isLoading ? (
             <div className="flex items-center gap-2 p-2">
@@ -108,7 +111,7 @@ export default function UsageView({ showMembers = false }: { showMembers?: boole
                       ) : (
                         <>
                           <p className="text-sm text-muted-foreground">Credits Remaining</p>
-                          <p className={`text-2xl font-bold ${creditLow ? 'text-red-600' : ''}`}>
+                          <p className={`text-2xl font-bold ${creditLow ? 'text-destructive' : ''}`}>
                             {formatNumber(credits.balance)} / {formatNumber(credits.monthlyAllocation)}
                           </p>
                           <p className="text-xs text-muted-foreground mt-1">

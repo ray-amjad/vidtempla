@@ -38,12 +38,15 @@ export default function McpServerView() {
       <Head>
         <title>MCP Server | VidTempla</title>
       </Head>
-      <DashboardLayout>
-        <div className="grid gap-6">
+      <DashboardLayout
+        title="MCP Server"
+        description="Connect Claude Code and other agents to VidTempla over MCP."
+      >
+        <div className="space-y-6">
           {/* Server Connection */}
           <Card>
             <CardHeader>
-              <CardTitle>Server Connection</CardTitle>
+              <CardTitle className="text-lg">Server Connection</CardTitle>
               <CardDescription>
                 Connection details for the VidTempla MCP server
               </CardDescription>
@@ -63,10 +66,10 @@ export default function McpServerView() {
                 <span className="text-sm font-medium">Transport</span>
                 <Badge variant="secondary">Streamable HTTP</Badge>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <span className="text-sm font-medium">Server URL</span>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 text-sm bg-muted px-3 py-2 rounded-md break-all">
+                  <code className="flex-1 text-sm bg-muted px-3 py-2 rounded-lg break-all">
                     {SERVER_URL}
                   </code>
                   <Button
@@ -89,14 +92,14 @@ export default function McpServerView() {
           {/* Setup */}
           <Card>
             <CardHeader>
-              <CardTitle>Setup</CardTitle>
+              <CardTitle className="text-lg">Setup</CardTitle>
               <CardDescription>
                 Run this command in your terminal to connect Claude Code
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               <div className="relative">
-                <pre className="text-sm bg-muted px-4 py-3 pr-12 rounded-md overflow-x-auto">
+                <pre className="text-sm bg-muted px-4 py-3 pr-12 rounded-lg overflow-x-auto">
                   {MCP_COMMAND}
                 </pre>
                 <Button

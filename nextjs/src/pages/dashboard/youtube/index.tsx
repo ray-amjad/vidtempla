@@ -47,31 +47,36 @@ export default function YouTubePage() {
       <Head>
         <title>YouTube Manager | VidTempla</title>
       </Head>
-      <DashboardLayout>
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="channels">Channels</TabsTrigger>
-            <TabsTrigger value="videos">Videos</TabsTrigger>
-            <TabsTrigger value="containers">Containers</TabsTrigger>
-            <TabsTrigger value="templates">Templates</TabsTrigger>
-          </TabsList>
+      <DashboardLayout
+        title="YouTube Manager"
+        description="Manage your channels, videos, containers, and templates."
+      >
+        <div className="space-y-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="channels">Channels</TabsTrigger>
+              <TabsTrigger value="videos">Videos</TabsTrigger>
+              <TabsTrigger value="containers">Containers</TabsTrigger>
+              <TabsTrigger value="templates">Templates</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="channels" className="mt-6">
-            <ChannelsTab />
-          </TabsContent>
+            <TabsContent value="channels" className="mt-6">
+              <ChannelsTab />
+            </TabsContent>
 
-          <TabsContent value="videos" className="mt-6">
-            <VideosTab />
-          </TabsContent>
+            <TabsContent value="videos" className="mt-6">
+              <VideosTab />
+            </TabsContent>
 
-          <TabsContent value="containers" className="mt-6">
-            <ContainersTab />
-          </TabsContent>
+            <TabsContent value="containers" className="mt-6">
+              <ContainersTab />
+            </TabsContent>
 
-          <TabsContent value="templates" className="mt-6">
-            <TemplatesTab />
-          </TabsContent>
-        </Tabs>
+            <TabsContent value="templates" className="mt-6">
+              <TemplatesTab />
+            </TabsContent>
+          </Tabs>
+        </div>
       </DashboardLayout>
     </>
   );

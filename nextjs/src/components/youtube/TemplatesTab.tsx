@@ -186,7 +186,7 @@ export default function TemplatesTab() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Templates</CardTitle>
+        <CardTitle className="text-lg">Templates</CardTitle>
         <p className="text-sm text-muted-foreground mt-1">
           Create templates with {'{{variables}}'} for dynamic content
         </p>

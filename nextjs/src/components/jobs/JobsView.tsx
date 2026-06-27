@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { api } from '@/utils/api';
 import type { RouterOutputs } from '@/utils/api';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   Table,
@@ -184,7 +184,7 @@ function JobDetailSheet({
               {data.items.map((item) => (
                 <div
                   key={item.id}
-                  className="flex items-center gap-3 rounded-md border p-2"
+                  className="flex items-center gap-3 rounded-lg border p-2"
                 >
                   <a
                     href={youtubeWatchUrl(item.videoYoutubeId)}
@@ -263,15 +263,9 @@ export default function JobsView() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Jobs</CardTitle>
-        <p className="text-sm text-muted-foreground mt-1">
-          Each YouTube description push is grouped into a job. Track live progress
-          and review past pushes.
-        </p>
-      </CardHeader>
-      <CardContent className="p-0">
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="p-0">
         {isLoading ? (
           <div className="flex justify-center py-8">
             <Spinner className="h-8 w-8 text-muted-foreground" />
@@ -333,7 +327,8 @@ export default function JobsView() {
             </Button>
           </div>
         )}
-      </CardContent>
+        </CardContent>
+      </Card>
 
       <JobDetailSheet
         jobId={selectedJob?.id ?? null}
@@ -341,6 +336,6 @@ export default function JobsView() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
       />
-    </Card>
+    </div>
   );
 }

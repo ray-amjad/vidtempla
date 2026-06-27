@@ -127,9 +127,9 @@ function MembersContent() {
   };
 
   return (
-    <>
-      <div className="flex items-center justify-end mb-6">
-        {isAdmin && (
+    <div className="space-y-6">
+      {isAdmin && (
+        <div className="flex items-center justify-end">
           <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
             <DialogTrigger asChild>
               <Button><UserPlus className="mr-2 h-4 w-4" />Invite Member</Button>
@@ -161,8 +161,8 @@ function MembersContent() {
               </div>
             </DialogContent>
           </Dialog>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Members list */}
       <div className="border rounded-lg divide-y">
@@ -226,8 +226,8 @@ function MembersContent() {
 
       {/* Pending invitations */}
       {invitations.length > 0 && (
-        <div className="mt-8">
-          <h2 className="text-lg font-semibold mb-4">Pending Invitations</h2>
+        <div className="space-y-4">
+          <h2 className="text-lg font-semibold">Pending Invitations</h2>
           <div className="border rounded-lg divide-y">
             {invitations
               .filter((inv: any) => inv.status === "pending")
@@ -255,7 +255,7 @@ function MembersContent() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 

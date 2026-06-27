@@ -62,7 +62,7 @@ export default function UpdateImpactDialog({
                     <strong className="text-foreground">{videoCount} video{videoCount !== 1 ? 's' : ''}</strong>.
                   </p>
                   {containers.length > 0 && (
-                    <div className="mt-3 rounded-md border border-border bg-muted/50 p-3">
+                    <div className="mt-3 rounded-lg border border-border bg-muted/50 p-3">
                       <p className="text-xs font-medium text-foreground mb-2">Affected Containers:</p>
                       <ul className="space-y-1 text-sm">
                         {containers.map((container) => (

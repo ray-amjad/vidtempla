@@ -261,10 +261,10 @@ export default function EditVariablesSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-3xl overflow-y-auto p-0 flex flex-col">
+      <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto p-0 flex flex-col">
         <div className="shrink-0 px-6 py-5 border-b bg-gradient-to-r from-background to-muted/20">
           <SheetHeader>
-            <SheetTitle className="text-xl font-semibold">Edit Variables</SheetTitle>
+            <SheetTitle>Edit Variables</SheetTitle>
             <SheetDescription className="text-sm mt-1.5 line-clamp-2">{videoTitle}</SheetDescription>
           </SheetHeader>
         </div>
