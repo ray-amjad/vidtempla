@@ -93,7 +93,10 @@ export function registerAnalyticsTools(server: McpServer) {
       videoCategoryId: z.string().optional().describe("YouTube category ID (e.g. 28=Science&Tech, 22=People&Blogs). Requires type=video"),
       videoDuration: z.string().optional().describe("Filter by duration: short (<4min), medium (4-20min), long (>20min). Requires type=video"),
       eventType: z.string().optional().describe("Filter livestream status: completed, live, upcoming. Requires type=video"),
-      includeStats: z.boolean().optional().describe("If true, hydrate each video result with viewCount/likeCount/commentCount (statistics) and duration (contentDetails) via a chained videos.list call. Adds 1 quota unit. Video results only."),
+      includeStats: z
+        .preprocess((v) => (typeof v === "string" ? v.toLowerCase() === "true" : v), z.boolean())
+        .optional()
+        .describe("If true, hydrate each video result with viewCount/likeCount/commentCount (statistics) and duration (contentDetails) via a chained videos.list call. Adds 1 quota unit. Video results only. Accepts a boolean or the string \"true\"/\"false\" (some MCP clients stringify args)."),
     },
     READ,
     async ({ channelId, ...opts }) => {
