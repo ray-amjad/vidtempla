@@ -99,10 +99,12 @@ export function registerAnalyticsTools(server: McpServer) {
     async ({ channelId, ...opts }) => {
       const userId = getSessionUserId();
       const orgId = getSessionOrgId();
-      const credits = await consumeCredits(orgId, 100);
+      // includeStats chains a second videos.list call (+1 YouTube quota unit).
+      const quotaUnits = opts.includeStats ? 101 : 100;
+      const credits = await consumeCredits(orgId, quotaUnits);
       if (!credits.success) return mcpQuotaExceeded(userId, "search_youtube");
       const result = await searchYouTube(channelId, userId, opts, orgId);
-      logMcpRequest(userId, "search_youtube", 100, "error" in result ? 400 : 200);
+      logMcpRequest(userId, "search_youtube", quotaUnits, "error" in result ? 400 : 200);
       return toMcp(result);
     }
   );
