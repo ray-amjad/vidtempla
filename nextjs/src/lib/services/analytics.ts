@@ -2,7 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "@/db";
 import { youtubeChannels } from "@/db/schema";
 import { getChannelTokens } from "@/lib/api-auth";
-import { fetchChannelAnalytics } from "@/lib/clients/youtube";
+import { fetchChannelAnalytics, fetchVideoDetails } from "@/lib/clients/youtube";
 import { start } from "workflow/api";
 import { syncChannelVideosWorkflow } from "@/workflows/sync-channel-videos";
 import axios from "axios";
@@ -173,6 +173,7 @@ export interface SearchYouTubeOpts {
   videoCategoryId?: string;
   videoDuration?: string;
   eventType?: string;
+  includeStats?: boolean;
 }
 
 export async function searchYouTube(
@@ -210,6 +211,33 @@ export async function searchYouTube(
       params,
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
     });
+
+    // Opt-in stats hydration: search only returns snippet data, so chain a
+    // videos.list call (1 quota unit, up to 50 ids) to merge in view/like/
+    // comment counts and duration. Only applies to video-type results.
+    if (opts.includeStats && (opts.type ?? "video") === "video") {
+      const items = response.data?.items ?? [];
+      const videoIds = items
+        .map((item: { id?: { videoId?: string } }) => item.id?.videoId)
+        .filter((id: string | undefined): id is string => Boolean(id));
+
+      if (videoIds.length > 0) {
+        try {
+          const details = await fetchVideoDetails(tokens.accessToken, videoIds);
+          const byId = new Map(details.map((d) => [d.id, d]));
+          for (const item of items) {
+            const detail = item.id?.videoId ? byId.get(item.id.videoId) : undefined;
+            if (detail) {
+              item.statistics = detail.statistics;
+              item.contentDetails = detail.contentDetails;
+            }
+          }
+        } catch (err) {
+          // Non-fatal: return the search results without stats rather than failing.
+          console.warn("[analytics] searchYouTube stats hydration failed:", err);
+        }
+      }
+    }
 
     return { data: response.data };
   } catch (error) {
