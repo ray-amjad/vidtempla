@@ -77,7 +77,7 @@ export function registerAnalyticsTools(server: McpServer) {
 
   server.tool(
     "search_youtube",
-    "Search all of YouTube (not just your channel). Costs 100 YouTube API quota units.",
+    "Search all of YouTube (not just your channel). Costs 100 YouTube API quota units (+1 if includeStats is set).",
     {
       channelId: z.string().describe("Your YouTube channel ID (used for OAuth authentication)"),
       q: z.string().describe("Search query"),
@@ -93,6 +93,7 @@ export function registerAnalyticsTools(server: McpServer) {
       videoCategoryId: z.string().optional().describe("YouTube category ID (e.g. 28=Science&Tech, 22=People&Blogs). Requires type=video"),
       videoDuration: z.string().optional().describe("Filter by duration: short (<4min), medium (4-20min), long (>20min). Requires type=video"),
       eventType: z.string().optional().describe("Filter livestream status: completed, live, upcoming. Requires type=video"),
+      includeStats: z.boolean().optional().describe("If true, hydrate each video result with viewCount/likeCount/commentCount (statistics) and duration (contentDetails) via a chained videos.list call. Adds 1 quota unit. Video results only."),
     },
     READ,
     async ({ channelId, ...opts }) => {
