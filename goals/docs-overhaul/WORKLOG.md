@@ -69,6 +69,13 @@
   as a baseline `tsconfig` dot-directory omission. Its two-line correction is
   committed separately as `457a94d` (`fix: include generated well-known routes
   in lint project`) rather than mixing it into the docs series.
-- Publication status: six scoped branches are pushed. Draft PR creation and
-  final merge/deployment validation remain blocked by the local GitHub CLI's
-  invalid authentication token.
+- Publication status: six scoped branches are pushed and their draft PRs are
+  open. GitHub Actions Documentation coverage passed on all five docs PRs;
+  none has review comments or unresolved review threads.
+- Live deployment blocker: every PR preview, including the independent lint
+  fix, fails before Next starts because the Preview Vercel environment has no
+  `DATABASE_URL` for `drizzle-kit migrate`. The representative docs-guides
+  deployment is `vidtempla-gsantdgvh-ray-amjad.vercel.app` (commit `929fb5e`).
+  This is an external environment configuration issue, so no Vercel setting
+  was changed. Final merge/deployment-SHA validation awaits both that fix and
+  explicit merge authorization.
