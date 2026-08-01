@@ -31,3 +31,9 @@
   generated-route lint failure.
 - Next action: review and commit this second scoped change, then document
   operations (jobs, drift/history), workspace, MCP, and the REST contract.
+
+## 2026-08-01 — Workspace
+
+- Added API-key, usage/billing, and organization/member guides.
+- Claimed seven more dashboard surfaces; only Jobs and MCP Server remain
+  exempt from dashboard coverage.
