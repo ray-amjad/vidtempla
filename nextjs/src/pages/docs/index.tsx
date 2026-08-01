@@ -19,8 +19,8 @@ export default function DocumentationIndexPage() {
         </h1>
         <p className="mt-5 text-lg leading-8 text-muted-foreground">
           VidTempla keeps description templates, per-video variables, and
-          YouTube updates in one place. The guides below will expand as each
-          shipped feature is documented.
+          YouTube updates in one place. Start with the core workflow, then use
+          the section navigation for a focused guide.
         </p>
         <section className="mt-10 grid gap-4 sm:grid-cols-2">
           <Link
@@ -35,15 +35,15 @@ export default function DocumentationIndexPage() {
             </p>
           </Link>
           <Link
-            href="/dashboard/mcp-server"
+            href="/docs/mcp/connect"
             className="rounded-xl border p-5 transition-colors hover:bg-muted/50"
           >
             <h2 className="font-semibold text-foreground">
               Connect an MCP client
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Find the live Streamable HTTP connection details in your
-              dashboard.
+              Set up Streamable HTTP, then copy the current connection details
+              from your dashboard.
             </p>
           </Link>
         </section>
