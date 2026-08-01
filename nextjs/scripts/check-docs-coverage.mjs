@@ -40,8 +40,15 @@ async function verifyPageSources(manifest) {
   return missing;
 }
 
-function claimsFor(manifest, kind) {
-  return manifest.pages.flatMap((page) => page.coverage?.[kind] ?? []);
+function claimsFor(manifest, kind, extracted) {
+  const claims = manifest.pages.flatMap((page) => page.coverage?.[kind] ?? []);
+  if (!claims.includes("*")) return claims;
+  if (claims.some((claim) => claim !== "*")) {
+    throw new Error(
+      `Wildcard ${kind} coverage cannot be mixed with explicit claims.`,
+    );
+  }
+  return extracted;
 }
 
 function validateKind(kind, extracted, claimed, exempted) {
@@ -98,7 +105,7 @@ export async function checkDocsCoverage({ expectedFailure = null } = {}) {
     ...validateKind(
       "REST operations",
       rest,
-      claimsFor(manifest, "rest"),
+      claimsFor(manifest, "rest", rest),
       exemptions.rest ?? [],
     ),
   );
@@ -106,7 +113,7 @@ export async function checkDocsCoverage({ expectedFailure = null } = {}) {
     ...validateKind(
       "MCP tools",
       mcp,
-      claimsFor(manifest, "mcp"),
+      claimsFor(manifest, "mcp", mcp),
       exemptions.mcp ?? [],
     ),
   );
@@ -114,7 +121,7 @@ export async function checkDocsCoverage({ expectedFailure = null } = {}) {
     ...validateKind(
       "dashboard surfaces",
       dashboard,
-      claimsFor(manifest, "dashboard"),
+      claimsFor(manifest, "dashboard", dashboard),
       exemptions.dashboard ?? [],
     ),
   );

@@ -1132,6 +1132,97 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /videos/{id}/history:
+    get:
+      operationId: getDescriptionHistory
+      summary: Get description history
+      description: Returns saved description versions for a video, newest first.
+      tags: [Videos]
+      x-quota-cost: 0
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200": { description: Description history }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /videos/{id}/check-drift:
+    post:
+      operationId: checkVideoDrift
+      summary: Check description drift
+      description: Compares the live YouTube description with VidTempla's stored description.
+      tags: [Videos]
+      x-quota-cost: 1
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Drift result }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /videos/{id}/resolve-drift:
+    post:
+      operationId: resolveVideoDrift
+      summary: Resolve description drift
+      description: Keeps a YouTube edit, reapplies the container template, or restores a history version.
+      tags: [Videos]
+      x-quota-cost: 0
+      x-requires-write: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [strategy]
+              properties:
+                strategy:
+                  type: string
+                  enum: [keep_youtube_edit, reapply_template, revert_to_version]
+                historyId: { type: string, format: uuid }
+      responses:
+        "200": { description: Drift resolved }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/InsufficientPermissions" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /videos/{id}/history/{historyId}/revert:
+    post:
+      operationId: revertDescription
+      summary: Revert a description version
+      description: Restores a saved description version and pushes it to YouTube.
+      tags: [Videos]
+      x-quota-cost: 0
+      x-requires-write: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: historyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Description reverted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/InsufficientPermissions" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ─── Templates ──────────────────────────────────────────────
 
   /templates:
@@ -1483,7 +1574,11 @@ paths:
                   description: Text separator between templates
             example:
               name: "Gaming Videos Layout"
-              templateIds: ["a1b2c3d4-e5f6-7890-abcd-ef1234567890", "b2c3d4e5-f6a7-8901-bcde-f12345678901"]
+              templateIds:
+                [
+                  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                  "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+                ]
               separator: "\n\n---\n\n"
       responses:
         "201":

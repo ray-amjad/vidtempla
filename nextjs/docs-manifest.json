@@ -109,6 +109,30 @@
         "mcp": [],
         "dashboard": ["organization/members", "organization/settings"]
       }
+    },
+    {
+      "path": "/docs/manage/jobs",
+      "title": "Description update jobs",
+      "description": "Track the background updates created by template, container, variable, and drift changes.",
+      "source": "src/pages/docs/manage/jobs.tsx",
+      "section": "Manage",
+      "coverage": { "rest": [], "mcp": [], "dashboard": ["jobs"] }
+    },
+    {
+      "path": "/docs/mcp/connect",
+      "title": "Connect an MCP client",
+      "description": "Connect Claude Code or another Streamable HTTP MCP client to VidTempla.",
+      "source": "src/pages/docs/mcp/connect.tsx",
+      "section": "MCP",
+      "coverage": { "rest": [], "mcp": ["*"], "dashboard": ["mcp-server"] }
+    },
+    {
+      "path": "/docs/api/rest-api",
+      "title": "REST API",
+      "description": "Use VidTempla’s API keys to manage channels, descriptions, and YouTube operations programmatically.",
+      "source": "src/pages/docs/api/rest-api.tsx",
+      "section": "API",
+      "coverage": { "rest": ["*"], "mcp": [], "dashboard": [] }
     }
   ]
 }

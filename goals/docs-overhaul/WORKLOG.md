@@ -37,3 +37,12 @@
 - Added API-key, usage/billing, and organization/member guides.
 - Claimed seven more dashboard surfaces; only Jobs and MCP Server remain
   exempt from dashboard coverage.
+
+## 2026-08-01 — Operations, MCP, and REST reference
+
+- Added guides for description update jobs, MCP connection/tool families, and
+  REST authentication, response conventions, pagination, permissions, and
+  quota.
+- Added the four shipped history/drift operations to OpenAPI.
+- Coverage now reports 43/43 REST operations, 42/42 MCP tools, and 12/12
+  dashboard surfaces with zero exemptions.
