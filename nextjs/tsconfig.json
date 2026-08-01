@@ -40,6 +40,8 @@
     "**/*.mjs",
     "**/*.ts",
     "**/*.tsx",
+    "src/app/.well-known/**/*.js",
+    "src/app/.well-known/**/*.ts",
     "next-env.d.ts",
     ".next/types/**/*.ts"
   ],
