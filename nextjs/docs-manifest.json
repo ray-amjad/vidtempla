@@ -1,0 +1,18 @@
+{
+  "title": "VidTempla documentation",
+  "baseUrl": "https://www.vidtempla.com",
+  "pages": [
+    {
+      "path": "/docs",
+      "title": "VidTempla documentation",
+      "description": "Guides for managing YouTube video descriptions with VidTempla.",
+      "source": "src/pages/docs/index.tsx",
+      "section": "Overview",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": []
+      }
+    }
+  ]
+}

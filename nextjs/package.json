@@ -7,6 +7,9 @@
     "dev": "next dev",
     "vercel-build": "npx drizzle-kit migrate && next build",
     "lint": "next lint",
+    "generate:llms": "node scripts/generate-llms-txt.mjs",
+    "test:docs-coverage": "node scripts/check-docs-coverage.mjs",
+    "test:docs-coverage-mutation": "node scripts/test-docs-coverage.mjs",
     "test:org-guards": "node scripts/check-youtube-router-org-guards.mjs",
     "test:encryption": "node --experimental-strip-types --test scripts/test-encryption.mjs",
     "start": "next start"

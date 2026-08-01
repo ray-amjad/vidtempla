@@ -1,0 +1,31 @@
+name: Documentation coverage
+
+on:
+  pull_request:
+    paths:
+      - "nextjs/docs-manifest.json"
+      - "nextjs/docs-coverage.exempt.json"
+      - "nextjs/public/llms.txt"
+      - "nextjs/public/openapi.yaml"
+      - "nextjs/scripts/**"
+      - "nextjs/src/app/api/v1/**"
+      - "nextjs/src/components/docs/**"
+      - "nextjs/src/lib/mcp/tools/**"
+      - "nextjs/src/pages/docs/**"
+      - "nextjs/src/pages/org/[slug]/**"
+  push:
+    branches: [main]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nextjs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run test:docs-coverage
+      - run: npm run test:docs-coverage-mutation
