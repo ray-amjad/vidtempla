@@ -46,3 +46,36 @@
 - Added the four shipped history/drift operations to OpenAPI.
 - Coverage now reports 43/43 REST operations, 42/42 MCP tools, and 12/12
   dashboard surfaces with zero exemptions.
+
+## 2026-08-01 — Information-architecture completion and final local validation
+
+- Audited the completed tree against the goal rather than treating coverage
+  counts as sufficient. Added the missing core-workflow and description-
+  lifecycle guides; focused management guides for channels/sync, videos, and
+  history/drift/revert; a workspace settings/plans guide; MCP tool-family
+  reference; and API errors/permissions guide.
+- Updated the docs landing page to point to the canonical MCP guide. Regenerated
+  `llms.txt`; it now indexes 21 canonical documentation pages as well as the
+  source-derived REST and MCP catalogs.
+- Verification on the local integration branch: `generate:llms`, docs coverage,
+  the controlled mutation test, org guards, encryption, TypeScript, and lint
+  pass. A production build reached compilation, lint, type checking, static
+  generation, and wrote a build ID with non-secret local placeholder
+  configuration; the command runner did not return a final exit status after
+  that output, so it is not treated as conclusive full-build evidence.
+- Route verification returned HTTP 200 for all new sampled docs pages and the
+  preserved `/reference`, `/openapi.yaml`, and `/llms.txt` paths.
+- The previously known generated-route lint failure was independently verified
+  as a baseline `tsconfig` dot-directory omission. Its two-line correction is
+  committed separately as `457a94d` (`fix: include generated well-known routes
+  in lint project`) rather than mixing it into the docs series.
+- Publication status: six scoped branches are pushed and their draft PRs are
+  open. GitHub Actions Documentation coverage passed on all five docs PRs;
+  none has review comments or unresolved review threads.
+- Live deployment blocker: every PR preview, including the independent lint
+  fix, fails before Next starts because the Preview Vercel environment has no
+  `DATABASE_URL` for `drizzle-kit migrate`. The representative docs-guides
+  deployment is `vidtempla-gsantdgvh-ray-amjad.vercel.app` (commit `929fb5e`).
+  This is an external environment configuration issue, so no Vercel setting
+  was changed. Final merge/deployment-SHA validation awaits both that fix and
+  explicit merge authorization.

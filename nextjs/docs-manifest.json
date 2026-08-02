@@ -43,6 +43,14 @@
       "coverage": { "rest": [], "mcp": [], "dashboard": [] }
     },
     {
+      "path": "/docs/get-started/core-workflow",
+      "title": "Core workflow",
+      "description": "Move from a connected YouTube channel to a repeatable, managed description workflow.",
+      "source": "src/pages/docs/get-started/core-workflow.tsx",
+      "section": "Get started",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
       "path": "/docs/concepts/templates",
       "title": "Templates",
       "description": "Create reusable description fragments and use placeholders for video-specific content.",
@@ -79,6 +87,14 @@
       }
     },
     {
+      "path": "/docs/concepts/description-lifecycle",
+      "title": "Description lifecycle",
+      "description": "Understand how VidTempla renders, updates, records, and protects managed YouTube descriptions.",
+      "source": "src/pages/docs/concepts/description-lifecycle.tsx",
+      "section": "Concepts",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
       "path": "/docs/workspace/api-keys",
       "title": "API keys",
       "description": "Create, copy, and revoke API keys for programmatic access to your workspace.",
@@ -97,6 +113,14 @@
         "mcp": [],
         "dashboard": ["usage", "pricing", "settings"]
       }
+    },
+    {
+      "path": "/docs/workspace/settings-and-plans",
+      "title": "Settings and plans",
+      "description": "Review workspace settings, plan status, billing period, and the subscription-management options available to your account.",
+      "source": "src/pages/docs/workspace/settings-and-plans.tsx",
+      "section": "Workspace",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
     },
     {
       "path": "/docs/workspace/organizations",
@@ -119,6 +143,30 @@
       "coverage": { "rest": [], "mcp": [], "dashboard": ["jobs"] }
     },
     {
+      "path": "/docs/manage/channels-and-sync",
+      "title": "Channels and sync",
+      "description": "Connect channels, sync their videos, and understand what happens when a channel is disconnected.",
+      "source": "src/pages/docs/manage/channels-and-sync.tsx",
+      "section": "Manage",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
+      "path": "/docs/manage/videos",
+      "title": "Manage videos",
+      "description": "Find synced videos, assign a description container, edit variables, and review managed-description status.",
+      "source": "src/pages/docs/manage/videos.tsx",
+      "section": "Manage",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
+      "path": "/docs/manage/history-and-drift",
+      "title": "History, drift, and revert",
+      "description": "Compare saved description versions, resolve direct YouTube edits, and restore an earlier managed description.",
+      "source": "src/pages/docs/manage/history-and-drift.tsx",
+      "section": "Manage",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
       "path": "/docs/mcp/connect",
       "title": "Connect an MCP client",
       "description": "Connect Claude Code or another Streamable HTTP MCP client to VidTempla.",
@@ -127,12 +175,28 @@
       "coverage": { "rest": [], "mcp": ["*"], "dashboard": ["mcp-server"] }
     },
     {
+      "path": "/docs/mcp/tool-reference",
+      "title": "MCP tool families",
+      "description": "Choose the VidTempla MCP tool family that matches the YouTube or description-management task at hand.",
+      "source": "src/pages/docs/mcp/tool-reference.tsx",
+      "section": "MCP",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
       "path": "/docs/api/rest-api",
       "title": "REST API",
       "description": "Use VidTempla’s API keys to manage channels, descriptions, and YouTube operations programmatically.",
       "source": "src/pages/docs/api/rest-api.tsx",
       "section": "API",
       "coverage": { "rest": ["*"], "mcp": [], "dashboard": [] }
+    },
+    {
+      "path": "/docs/api/errors-and-permissions",
+      "title": "API errors and permissions",
+      "description": "Interpret VidTempla API responses, choose the right API-key permission, and handle quota-limited YouTube operations.",
+      "source": "src/pages/docs/api/errors-and-permissions.tsx",
+      "section": "API",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
     }
   ]
 }

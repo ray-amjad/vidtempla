@@ -8,15 +8,23 @@
 - [Quickstart](https://www.vidtempla.com/docs/get-started/quickstart): Set up a repeatable YouTube description workflow with VidTempla.
 - [Connect a YouTube channel](https://www.vidtempla.com/docs/get-started/connect-youtube): Authorize VidTempla to manage the channels in your workspace.
 - [Create your first managed description](https://www.vidtempla.com/docs/get-started/first-description): Build a reusable description, assign it to a video, and personalize it with variables.
+- [Core workflow](https://www.vidtempla.com/docs/get-started/core-workflow): Move from a connected YouTube channel to a repeatable, managed description workflow.
 - [Templates](https://www.vidtempla.com/docs/concepts/templates): Create reusable description fragments and use placeholders for video-specific content.
 - [Containers](https://www.vidtempla.com/docs/concepts/containers): Combine templates into an ordered description structure that can be assigned to videos.
 - [Variables and video assignment](https://www.vidtempla.com/docs/concepts/variables-and-assignment): Personalize a container for each video and preview the description before queuing an update.
+- [Description lifecycle](https://www.vidtempla.com/docs/concepts/description-lifecycle): Understand how VidTempla renders, updates, records, and protects managed YouTube descriptions.
 - [API keys](https://www.vidtempla.com/docs/workspace/api-keys): Create, copy, and revoke API keys for programmatic access to your workspace.
 - [Usage and billing](https://www.vidtempla.com/docs/workspace/usage-and-billing): Review API activity, YouTube quota, credits, plan limits, and subscription details.
+- [Settings and plans](https://www.vidtempla.com/docs/workspace/settings-and-plans): Review workspace settings, plan status, billing period, and the subscription-management options available to your account.
 - [Organizations and members](https://www.vidtempla.com/docs/workspace/organizations): Manage workspace membership, roles, invitations, and organization settings.
 - [Description update jobs](https://www.vidtempla.com/docs/manage/jobs): Track the background updates created by template, container, variable, and drift changes.
+- [Channels and sync](https://www.vidtempla.com/docs/manage/channels-and-sync): Connect channels, sync their videos, and understand what happens when a channel is disconnected.
+- [Manage videos](https://www.vidtempla.com/docs/manage/videos): Find synced videos, assign a description container, edit variables, and review managed-description status.
+- [History, drift, and revert](https://www.vidtempla.com/docs/manage/history-and-drift): Compare saved description versions, resolve direct YouTube edits, and restore an earlier managed description.
 - [Connect an MCP client](https://www.vidtempla.com/docs/mcp/connect): Connect Claude Code or another Streamable HTTP MCP client to VidTempla.
+- [MCP tool families](https://www.vidtempla.com/docs/mcp/tool-reference): Choose the VidTempla MCP tool family that matches the YouTube or description-management task at hand.
 - [REST API](https://www.vidtempla.com/docs/api/rest-api): Use VidTempla’s API keys to manage channels, descriptions, and YouTube operations programmatically.
+- [API errors and permissions](https://www.vidtempla.com/docs/api/errors-and-permissions): Interpret VidTempla API responses, choose the right API-key permission, and handle quota-limited YouTube operations.
 - [Interactive REST API reference](https://www.vidtempla.com/reference): Scalar API reference backed by OpenAPI.
 - [OpenAPI specification](https://www.vidtempla.com/openapi.yaml): Machine-readable REST API specification.
 
