@@ -5,6 +5,7 @@ A powerful dashboard and API platform for managing YouTube video descriptions at
 ## Features
 
 ### Core Functionality
+
 - **Multi-Channel Support**: Connect and manage multiple YouTube channels via OAuth
 - **Template System**: Create reusable description templates with `{{variable}}` placeholders
 - **Container Management**: Group templates together to create description structures
@@ -13,6 +14,7 @@ A powerful dashboard and API platform for managing YouTube video descriptions at
 - **Batch Updates**: Update multiple video descriptions simultaneously
 
 ### Key Features
+
 - 🔐 Secure authentication with magic link and Google OAuth
 - 📝 Powerful template editor with variable auto-detection
 - 🎯 Immutable video-to-container assignment for data integrity
@@ -40,15 +42,15 @@ A powerful dashboard and API platform for managing YouTube video descriptions at
 
 VidTempla exposes a REST API for programmatic access, usable by AI agents or external tools. Authenticate with an API key generated in the dashboard.
 
-| Group | Endpoints |
-|-------|-----------|
-| **Channels** | List, get, overview, analytics, sync, search |
-| **Videos** | List, get, analytics, retention, assign, variables, description history & revert |
-| **Templates** | CRUD, impact analysis |
-| **Containers** | CRUD |
-| **YouTube Proxy** | Playlists, comments, thumbnails, captions & transcripts |
-| **Analytics** | Flexible YouTube Analytics API queries |
-| **Usage** | API request tracking and quota monitoring |
+| Group             | Endpoints                                                                        |
+| ----------------- | -------------------------------------------------------------------------------- |
+| **Channels**      | List, get, overview, analytics, sync, search                                     |
+| **Videos**        | List, get, analytics, retention, assign, variables, description history & revert |
+| **Templates**     | CRUD, impact analysis                                                            |
+| **Containers**    | CRUD                                                                             |
+| **YouTube Proxy** | Playlists, comments, thumbnails, and search                                      |
+| **Analytics**     | Flexible YouTube Analytics API queries                                           |
+| **Usage**         | API request tracking and quota monitoring                                        |
 
 Interactive API reference available at `/reference`.
 
