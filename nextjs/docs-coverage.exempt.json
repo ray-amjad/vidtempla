@@ -96,10 +96,6 @@
   ],
   "dashboard": [
     "api-keys",
-    "dashboard/youtube/channels",
-    "dashboard/youtube/containers",
-    "dashboard/youtube/templates",
-    "dashboard/youtube/videos",
     "jobs",
     "mcp-server",
     "organization/members",

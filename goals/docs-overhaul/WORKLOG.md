@@ -18,6 +18,16 @@
 - Known baseline verification issue: lint and `next build` compile the new docs
   code but fail afterward on five pre-existing generated `.well-known` routes
   excluded from the ESLint TypeScript project.
-- Phase 0 committed locally as `6874f11` (`docs: add coverage foundations`).
-- Next action: push/open the scoped Phase 0 PR after approval, then add the Get
-  started and Concepts section in the next scoped PR.
+- Phase 0 committed locally as `fb35d4c` (`docs: add coverage foundations`).
+
+## 2026-08-01 — Get started and Concepts
+
+- Added six pages for quickstart, channel connection, first managed
+  description, templates, containers, and variables/video assignment.
+- Claimed the four shipped YouTube Manager tab surfaces in the manifest,
+  reducing dashboard documentation exemptions from 12 to 8.
+- Verification: focused docs lint, docs coverage, mutation test, and TypeScript
+  passed. The app build compiled successfully before the known unrelated
+  generated-route lint failure.
+- Next action: review and commit this second scoped change, then document
+  operations (jobs, drift/history), workspace, MCP, and the REST contract.

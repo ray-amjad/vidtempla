@@ -13,6 +13,70 @@
         "mcp": [],
         "dashboard": []
       }
+    },
+    {
+      "path": "/docs/get-started/quickstart",
+      "title": "Quickstart",
+      "description": "Set up a repeatable YouTube description workflow with VidTempla.",
+      "source": "src/pages/docs/get-started/quickstart.tsx",
+      "section": "Get started",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
+      "path": "/docs/get-started/connect-youtube",
+      "title": "Connect a YouTube channel",
+      "description": "Authorize VidTempla to manage the channels in your workspace.",
+      "source": "src/pages/docs/get-started/connect-youtube.tsx",
+      "section": "Get started",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": ["dashboard/youtube/channels"]
+      }
+    },
+    {
+      "path": "/docs/get-started/first-description",
+      "title": "Create your first managed description",
+      "description": "Build a reusable description, assign it to a video, and personalize it with variables.",
+      "source": "src/pages/docs/get-started/first-description.tsx",
+      "section": "Get started",
+      "coverage": { "rest": [], "mcp": [], "dashboard": [] }
+    },
+    {
+      "path": "/docs/concepts/templates",
+      "title": "Templates",
+      "description": "Create reusable description fragments and use placeholders for video-specific content.",
+      "source": "src/pages/docs/concepts/templates.tsx",
+      "section": "Concepts",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": ["dashboard/youtube/templates"]
+      }
+    },
+    {
+      "path": "/docs/concepts/containers",
+      "title": "Containers",
+      "description": "Combine templates into an ordered description structure that can be assigned to videos.",
+      "source": "src/pages/docs/concepts/containers.tsx",
+      "section": "Concepts",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": ["dashboard/youtube/containers"]
+      }
+    },
+    {
+      "path": "/docs/concepts/variables-and-assignment",
+      "title": "Variables and video assignment",
+      "description": "Personalize a container for each video and preview the description before queuing an update.",
+      "source": "src/pages/docs/concepts/variables-and-assignment.tsx",
+      "section": "Concepts",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": ["dashboard/youtube/videos"]
+      }
     }
   ]
 }
