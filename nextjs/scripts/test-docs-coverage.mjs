@@ -8,14 +8,21 @@ const originalManifest = await readFile(manifestPath, "utf8");
 const manifest = JSON.parse(originalManifest);
 
 try {
-  manifest.pages[0].coverage.rest.push("GET /api/v1/channels");
+  const restReference = manifest.pages.find(
+    (page) => page.path === "/docs/api/rest-api",
+  );
+  if (!restReference)
+    throw new Error(
+      "REST API documentation page is missing from the manifest.",
+    );
+  restReference.coverage.rest = [];
   await writeFile(
     manifestPath,
     `${JSON.stringify(manifest, null, 2)}\n`,
     "utf8",
   );
   await checkDocsCoverage({
-    expectedFailure: "REST operations both claimed and exempted",
+    expectedFailure: "uncovered REST operations",
   });
   console.log("Docs coverage mutation test passed.");
 } finally {
