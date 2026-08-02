@@ -11,6 +11,9 @@
 - [Templates](https://www.vidtempla.com/docs/concepts/templates): Create reusable description fragments and use placeholders for video-specific content.
 - [Containers](https://www.vidtempla.com/docs/concepts/containers): Combine templates into an ordered description structure that can be assigned to videos.
 - [Variables and video assignment](https://www.vidtempla.com/docs/concepts/variables-and-assignment): Personalize a container for each video and preview the description before queuing an update.
+- [API keys](https://www.vidtempla.com/docs/workspace/api-keys): Create, copy, and revoke API keys for programmatic access to your workspace.
+- [Usage and billing](https://www.vidtempla.com/docs/workspace/usage-and-billing): Review API activity, YouTube quota, credits, plan limits, and subscription details.
+- [Organizations and members](https://www.vidtempla.com/docs/workspace/organizations): Manage workspace membership, roles, invitations, and organization settings.
 - [Interactive REST API reference](https://www.vidtempla.com/reference): Scalar API reference backed by OpenAPI.
 - [OpenAPI specification](https://www.vidtempla.com/openapi.yaml): Machine-readable REST API specification.
 

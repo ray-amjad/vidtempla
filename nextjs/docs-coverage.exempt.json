@@ -94,16 +94,7 @@
     "update_template",
     "update_video_variables"
   ],
-  "dashboard": [
-    "api-keys",
-    "jobs",
-    "mcp-server",
-    "organization/members",
-    "organization/settings",
-    "pricing",
-    "settings",
-    "usage"
-  ],
+  "dashboard": ["jobs", "mcp-server"],
   "openapi": [
     "GET /api/v1/videos/{id}/history",
     "POST /api/v1/videos/{id}/check-drift",

@@ -77,6 +77,38 @@
         "mcp": [],
         "dashboard": ["dashboard/youtube/videos"]
       }
+    },
+    {
+      "path": "/docs/workspace/api-keys",
+      "title": "API keys",
+      "description": "Create, copy, and revoke API keys for programmatic access to your workspace.",
+      "source": "src/pages/docs/workspace/api-keys.tsx",
+      "section": "Workspace",
+      "coverage": { "rest": [], "mcp": [], "dashboard": ["api-keys"] }
+    },
+    {
+      "path": "/docs/workspace/usage-and-billing",
+      "title": "Usage and billing",
+      "description": "Review API activity, YouTube quota, credits, plan limits, and subscription details.",
+      "source": "src/pages/docs/workspace/usage-and-billing.tsx",
+      "section": "Workspace",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": ["usage", "pricing", "settings"]
+      }
+    },
+    {
+      "path": "/docs/workspace/organizations",
+      "title": "Organizations and members",
+      "description": "Manage workspace membership, roles, invitations, and organization settings.",
+      "source": "src/pages/docs/workspace/organizations.tsx",
+      "section": "Workspace",
+      "coverage": {
+        "rest": [],
+        "mcp": [],
+        "dashboard": ["organization/members", "organization/settings"]
+      }
     }
   ]
 }
