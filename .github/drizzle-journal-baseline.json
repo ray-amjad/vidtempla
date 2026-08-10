@@ -1,0 +1,16 @@
+{
+  "allow_out_of_order": [
+    {
+      "idx": 14,
+      "tag": "0014_dedupe_subscriptions_org_id",
+      "when": 1777211791790,
+      "why": "Stamped below idx=13 (when=1777213128064) and shipped in a separate deploy, so production's migrator watermark skipped it. Reconciled by 0021_redo_dedupe_subscriptions_org_id, which repeats this body verbatim and applied successfully to production on 2026-08-10. Left un-restamped on purpose: changing `when` would hide it from every database that already ran it."
+    },
+    {
+      "idx": 15,
+      "tag": "0015_subscriptions_org_id_unique",
+      "when": 1777211919204,
+      "why": "Skipped in production for the same reason as idx=14. Reconciled by 0022_redo_subscriptions_org_id_unique, which repeats it with IF NOT EXISTS and applied successfully to production on 2026-08-10. Left un-restamped on purpose, as with idx=14."
+    }
+  ]
+}
