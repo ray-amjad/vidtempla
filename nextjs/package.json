@@ -65,7 +65,7 @@
     "luxon": "^3.5.0",
     "mcp-handler": "^1.0.7",
     "micro": "^10.0.1",
-    "nanoid": "^5.0.9",
+    "nanoid": "^5.1.16",
     "next": "15.5.18",
     "postgres": "^3.4.8",
     "posthog-js": "^1.393.5",
