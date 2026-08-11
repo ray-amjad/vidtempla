@@ -15,6 +15,7 @@ import {
   checkDrift,
   resolveDrift,
 } from "@/lib/services/videos";
+import { videoVariableUpdatesSchema } from "@/lib/validation/videoVariables";
 
 export function registerVideoTools(server: McpServer) {
   server.tool(
@@ -128,13 +129,9 @@ export function registerVideoTools(server: McpServer) {
     "Update template variable values for a video and trigger description rebuild. If the video has drift, returns VIDEO_HAS_DRIFT unless force=true.",
     {
       id: z.string().describe("VidTempla UUID or YouTube video ID"),
-      variables: z.array(
-        z.object({
-          templateId: z.string().describe("Template UUID"),
-          name: z.string().describe("Variable name"),
-          value: z.string().describe("Variable value"),
-        })
-      ).describe("Array of variables to update"),
+      variables: videoVariableUpdatesSchema.describe(
+        "Array of variables to update"
+      ),
       force: z.boolean().optional().describe("Set true to overwrite a drifted YouTube edit"),
     },
     WRITE,

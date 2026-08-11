@@ -31,6 +31,7 @@ import {
   resolveDrift as resolveDriftService,
 } from '@/lib/services/videos';
 import { assertNoDrift } from '@/lib/services/drift';
+import { videoVariableUpdatesSchema } from '@/lib/validation/videoVariables';
 
 /** Verify a video belongs to the given org (via its channel). Throws NOT_FOUND if not. */
 async function verifyVideoOwnership(videoId: string, organizationId: string) {
@@ -617,13 +618,7 @@ export const youtubeRouter = router({
       .input(
         z.object({
           videoId: z.string().uuid(),
-          variables: z.array(
-            z.object({
-              templateId: z.string().uuid(),
-              name: z.string(),
-              value: z.string(),
-            })
-          ),
+          variables: videoVariableUpdatesSchema,
           force: z.boolean().optional(),
         })
       )
