@@ -94,6 +94,7 @@ The Streamable HTTP MCP server is available at `https://www.vidtempla.com/api/mc
 - `get_channel`
 - `get_channel_analytics`
 - `get_channel_overview`
+- `get_comment_replies`
 - `get_container`
 - `get_description_history`
 - `get_playlist`
@@ -104,12 +105,14 @@ The Streamable HTTP MCP server is available at `https://www.vidtempla.com/api/mc
 - `get_video_retention`
 - `get_video_variables`
 - `list_channels`
+- `list_comment_edits`
 - `list_comment_threads`
 - `list_containers`
 - `list_playlist_items`
 - `list_playlists`
 - `list_templates`
 - `list_videos`
+- `post_comment`
 - `query_analytics`
 - `reply_to_comment`
 - `resolve_drift`
@@ -118,6 +121,7 @@ The Streamable HTTP MCP server is available at `https://www.vidtempla.com/api/mc
 - `search_youtube`
 - `sync_channel`
 - `update_comment`
+- `update_comments`
 - `update_container`
 - `update_playlist`
 - `update_template`
