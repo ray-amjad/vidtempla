@@ -226,12 +226,16 @@ export async function resolveChannelId(
 /**
  * Generates OAuth authorization URL for YouTube
  */
-export function getOAuthUrl(): string {
+export function getOAuthUrl(state: string): string {
   const clientId = process.env.YOUTUBE_CLIENT_ID;
   const redirectUri = process.env.YOUTUBE_REDIRECT_URI;
 
   if (!clientId || !redirectUri) {
     throw new Error('YouTube OAuth credentials not configured');
+  }
+
+  if (!state) {
+    throw new Error('YouTube OAuth state is required');
   }
 
   const params = new URLSearchParams({
@@ -245,6 +249,7 @@ export function getOAuthUrl(): string {
     ].join(' '),
     access_type: 'offline',
     prompt: 'consent',
+    state,
   });
 
   return `${YOUTUBE_AUTH_URL}?${params.toString()}`;

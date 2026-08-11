@@ -11,6 +11,11 @@ import {
   fetchChannelInfo,
 } from '@/lib/clients/youtube';
 import { encrypt } from '@/utils/encryption';
+import {
+  YOUTUBE_OAUTH_STATE_COOKIE,
+  clearStateCookie,
+  verifyOAuthState,
+} from '@/lib/youtube-oauth-state';
 import { checkChannelLimit } from '@/lib/plan-limits';
 import { start } from 'workflow/api';
 import { syncChannelVideosWorkflow } from '@/workflows/sync-channel-videos';
@@ -27,7 +32,11 @@ export default async function handler(
   }
 
   try {
-    const { code, error } = req.query;
+    const { code, error, state } = req.query;
+
+    // The state is single-use: clear it on every outcome, including failures.
+    const stateCookie = req.cookies[YOUTUBE_OAUTH_STATE_COOKIE];
+    res.setHeader('Set-Cookie', clearStateCookie());
 
     // Handle OAuth errors
     if (error) {
@@ -40,6 +49,19 @@ export default async function handler(
     if (!code || typeof code !== 'string') {
       return res.redirect(
         '/dashboard/youtube?error=no_code'
+      );
+    }
+
+    // Reject any authorization response that did not originate from our own
+    // initiation endpoint in this browser.
+    if (
+      !verifyOAuthState(typeof state === 'string' ? state : null, stateCookie)
+    ) {
+      return res.redirect(
+        '/dashboard/youtube?error=' +
+          encodeURIComponent(
+            'Could not verify the connection request. Please try connecting your channel again.'
+          )
       );
     }
 
