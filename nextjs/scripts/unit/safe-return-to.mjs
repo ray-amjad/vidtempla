@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { firstQueryValue, getSafeReturnTo } = await import(
-  "../src/utils/safeReturnTo.ts"
+  "../../src/utils/safeReturnTo.ts"
 );
 
 test("same-origin paths are preserved, query and hash included", () => {
