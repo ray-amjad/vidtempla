@@ -120,6 +120,13 @@ export const auth = betterAuth({
       oidcConfig: {
         loginPage: "/sign-in",
         consentPage: "/auth/consent",
+        // Kept on deliberately: MCP clients self-register at
+        // /api/auth/mcp/register (RFC 7591), so turning this off would mean
+        // hand-registering every client that wants to use the MCP server.
+        // The trade-off is that anyone can create an oauthApplication row.
+        // Nothing is granted by registration alone - a client still needs a
+        // signed-in user to complete consent, and the consent page validates
+        // the redirect URI scheme before navigating (see safeRedirectUri.ts).
         allowDynamicClientRegistration: true,
       },
     }),

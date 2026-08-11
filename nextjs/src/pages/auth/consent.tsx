@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { oauthApplication } from "@/db/schema";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
+import { getSafeRedirectUri } from "@/utils/safeRedirectUri";
 
 export const getServerSideProps: GetServerSideProps<{
   clientName: string;
@@ -41,8 +42,11 @@ export default function ConsentPage({
         body: { accept, consent_code: consentCode },
       });
       const data = res.data as { redirectURI?: string } | undefined;
-      if (data?.redirectURI) {
-        window.location.href = data.redirectURI;
+      const redirectUri = getSafeRedirectUri(data?.redirectURI);
+      if (redirectUri) {
+        window.location.href = redirectUri;
+      } else {
+        setIsLoading(false);
       }
     } catch {
       setIsLoading(false);
