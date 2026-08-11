@@ -7,7 +7,7 @@ const {
   MAX_VARIABLE_VALUE_LENGTH,
   formatVariableIssues,
   videoVariableUpdatesSchema,
-} = await import("../src/lib/validation/videoVariables.ts");
+} = await import("../../src/lib/validation/videoVariables.ts");
 
 const VALID_UUID = "11111111-2222-4333-8444-555555555555";
 
