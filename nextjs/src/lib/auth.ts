@@ -9,11 +9,20 @@ import { PLAN_CONFIG } from "@/lib/stripe";
 import { sendMagicLinkEmail } from "@/lib/email/senders/sendMagicLinkEmail";
 import { sendOrgInviteEmail } from "@/lib/email/senders/sendOrgInviteEmail";
 
+// Fail loudly rather than letting Better Auth fall back to the request Host
+// header. auth.ts reads process.env directly, so this check does not depend on
+// the env module having been imported first.
+const baseURL = process.env.BETTER_AUTH_URL;
+
+if (!baseURL) {
+  throw new Error(
+    "BETTER_AUTH_URL is not set. It is required so auth URLs and trusted origins are never derived from the request Host header."
+  );
+}
+
 export const auth = betterAuth({
-  baseURL: process.env.BETTER_AUTH_URL,
-  trustedOrigins: [
-    process.env.BETTER_AUTH_URL!,
-  ].filter(Boolean),
+  baseURL,
+  trustedOrigins: [baseURL],
   database: drizzleAdapter(db, {
     provider: "pg",
     schema,
@@ -97,7 +106,7 @@ export const auth = betterAuth({
     }),
     organization({
       sendInvitationEmail: async ({ email, id, organization: org, inviter }) => {
-        const inviteUrl = `${process.env.BETTER_AUTH_URL}/invite/${id}`;
+        const inviteUrl = `${baseURL}/invite/${id}`;
         await sendOrgInviteEmail({
           email,
           inviteUrl,
