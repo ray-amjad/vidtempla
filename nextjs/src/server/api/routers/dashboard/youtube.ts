@@ -6,7 +6,6 @@
 import { z } from 'zod';
 import { orgProcedure } from '@/server/trpc/init';
 import { TRPCError } from '@trpc/server';
-import { getOAuthUrl } from '@/lib/clients/youtube';
 import { decrypt, encrypt } from '@/utils/encryption';
 import { refreshAccessToken, fetchChannelVideos } from '@/lib/clients/youtube';
 import {
@@ -96,10 +95,6 @@ export const youtubeRouter = router({
     checkLimit: orgProcedure.query(async ({ ctx }) => {
       const result = await checkChannelLimit(ctx.organizationId, db);
       return result;
-    }),
-
-    initiateOAuth: orgProcedure.mutation(async () => {
-      return { url: getOAuthUrl() };
     }),
 
     disconnect: orgProcedure

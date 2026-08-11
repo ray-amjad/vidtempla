@@ -5,6 +5,10 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getOAuthUrl } from '@/lib/clients/youtube';
+import {
+  createOAuthState,
+  serializeStateCookie,
+} from '@/lib/youtube-oauth-state';
 
 export default async function handler(
   req: NextApiRequest,
@@ -15,7 +19,12 @@ export default async function handler(
   }
 
   try {
-    const authUrl = getOAuthUrl();
+    // Bind this authorization request to the caller's browser so the callback
+    // can reject an authorization response the caller did not start.
+    const { state, cookieValue } = createOAuthState();
+    res.setHeader('Set-Cookie', serializeStateCookie(cookieValue));
+
+    const authUrl = getOAuthUrl(state);
     return res.redirect(authUrl);
   } catch (error) {
     console.error('Error initiating YouTube OAuth:', error);
