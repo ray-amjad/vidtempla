@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { appConfig } from "@/config/app";
 import Link from "next/link";
 import { AuthLayout } from "@/components/layout/AuthLayout";
+import { getSafeReturnTo } from "@/utils/safeReturnTo";
 
 const btnStyle: React.CSSProperties = {
   fontFamily: "'Bricolage Grotesque', sans-serif",
@@ -32,12 +33,8 @@ export default function Page() {
 
   useEffect(() => {
     if (user && !userLoading) {
-      const returnTo = router.query.returnTo as string;
-      if (returnTo && returnTo.startsWith("/")) {
-        router.push(decodeURIComponent(returnTo));
-      } else {
-        router.push("/org/resolve");
-      }
+      const returnTo = getSafeReturnTo(router.query.returnTo);
+      router.push(returnTo ?? "/org/resolve");
     }
   }, [user, userLoading]);
 
