@@ -29,7 +29,10 @@ export const serverSchema = z.object({
 
   // Better Auth
   BETTER_AUTH_SECRET: z.string(),
-  BETTER_AUTH_URL: z.string().url().optional(),
+  // Required: when unset, Better Auth derives its base URL from the request Host
+  // header, which would put a spoofed host into magic-link emails and leave
+  // `trustedOrigins` empty.
+  BETTER_AUTH_URL: z.string().url(),
 
   // SendGrid
   SENDGRID_API_KEY: z.string(),
