@@ -3,38 +3,10 @@ import { useRouter } from "next/router";
 import { authClient } from "@/lib/auth-client";
 import { useToast } from "@/hooks/use-toast";
 import Head from "next/head";
+import { firstQueryValue, getSafeReturnTo } from "@/utils/safeReturnTo";
 
 const SIGN_IN_REDIRECT_DELAY_MS = 500;
 const FALLBACK_AUTH_ERROR_DESCRIPTION = "Authentication failed. Please try again.";
-
-function firstQueryValue(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function getSafeReturnTo(value: string | string[] | undefined) {
-  const rawReturnTo = firstQueryValue(value);
-  if (!rawReturnTo || !rawReturnTo.startsWith("/")) return null;
-
-  let decodedReturnTo: string;
-  try {
-    decodedReturnTo = decodeURIComponent(rawReturnTo);
-  } catch {
-    return null;
-  }
-
-  if (
-    !decodedReturnTo.startsWith("/") ||
-    decodedReturnTo.startsWith("//") ||
-    decodedReturnTo.includes("\\")
-  ) {
-    return null;
-  }
-
-  const parsedReturnTo = new URL(decodedReturnTo, "https://vidtempla.local");
-  if (parsedReturnTo.origin !== "https://vidtempla.local") return null;
-
-  return `${parsedReturnTo.pathname}${parsedReturnTo.search}${parsedReturnTo.hash}`;
-}
 
 export default function AuthCallback() {
   const router = useRouter();
