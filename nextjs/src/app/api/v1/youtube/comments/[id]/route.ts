@@ -4,13 +4,10 @@ import {
   requireWriteAccess,
   apiSuccess,
   apiError,
-  getChannelTokens,
   logRequest,
 } from "@/lib/api-auth";
-import { mapYouTubeError } from "@/lib/youtube-errors";
-import axios from "axios";
-
-const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
+import { commentContext, serviceErrorResponse } from "@/lib/api-comments";
+import { creditsConsumedOf, deleteComment, listCommentThreads } from "@/lib/services/comments";
 
 /**
  * GET /api/v1/youtube/comments/[id]?channelId=...&maxResults=100&order=relevance|time&cursor=...
@@ -25,17 +22,18 @@ export async function GET(
   if (ctx instanceof NextResponse) return ctx;
 
   const { id: videoId } = await params;
+  const endpoint = `/youtube/comments/${videoId}`;
   const { searchParams } = new URL(request.url);
   const channelId = searchParams.get("channelId");
-  const pageToken = searchParams.get("cursor") || searchParams.get("pageToken");
-  const maxResults = Math.min(
-    parseInt(searchParams.get("maxResults") || "20", 10),
-    100
-  );
+  const pageToken = searchParams.get("cursor") || searchParams.get("pageToken") || undefined;
+  const maxResultsParam = searchParams.get("maxResults");
+  const maxResults = maxResultsParam
+    ? Math.min(Math.max(parseInt(maxResultsParam, 10) || 20, 1), 100)
+    : undefined;
   const order = searchParams.get("order") || "relevance";
 
   if (!channelId) {
-    await logRequest(ctx, `/youtube/comments/${videoId}`, "GET", 400, 0);
+    logRequest(ctx, endpoint, "GET", 400, 0);
     return NextResponse.json(
       apiError(
         "MISSING_PARAMETER",
@@ -48,7 +46,7 @@ export async function GET(
   }
 
   if (!["relevance", "time"].includes(order)) {
-    await logRequest(ctx, `/youtube/comments/${videoId}`, "GET", 400, 0);
+    logRequest(ctx, endpoint, "GET", 400, 0);
     return NextResponse.json(
       apiError(
         "INVALID_PARAMETER",
@@ -60,46 +58,29 @@ export async function GET(
     );
   }
 
-  const tokens = await getChannelTokens(channelId, ctx.userId, ctx.organizationId);
-  if ("error" in tokens) {
-    await logRequest(ctx, `/youtube/comments/${videoId}`, "GET", tokens.status, 0);
-    return NextResponse.json(tokens.error, { status: tokens.status });
-  }
+  const result = await listCommentThreads(channelId, videoId, commentContext(ctx), {
+    maxResults,
+    order,
+    pageToken,
+  });
+  if ("error" in result) return serviceErrorResponse(ctx, endpoint, "GET", result);
 
-  try {
-    const response = await axios.get(`${YOUTUBE_API_BASE}/commentThreads`, {
-      params: {
-        part: "snippet,replies",
-        videoId,
-        maxResults,
-        order,
-        ...(pageToken && { pageToken }),
-      },
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
-    });
-
-    await logRequest(ctx, `/youtube/comments/${videoId}`, "GET", 200, 1);
-    const nextPageToken: string | null = response.data.nextPageToken || null;
-    const pageInfo: { totalResults?: number } | undefined = response.data.pageInfo;
-    return NextResponse.json(
-      apiSuccess(response.data.items || [], {
-        cursor: nextPageToken,
-        hasMore: Boolean(nextPageToken),
-        total: pageInfo?.totalResults ?? null,
-        quotaUnits: 1,
-      })
-    );
-  } catch (error) {
-    const mapped = mapYouTubeError(error);
-    await logRequest(ctx, `/youtube/comments/${videoId}`, "GET", mapped.status, 1);
-    return NextResponse.json(mapped.body, { status: mapped.status });
-  }
+  const quotaUnits = creditsConsumedOf(result);
+  logRequest(ctx, endpoint, "GET", 200, quotaUnits);
+  return NextResponse.json(
+    apiSuccess(result.data.items, {
+      cursor: result.data.nextPageToken ?? null,
+      hasMore: Boolean(result.data.nextPageToken),
+      total: null,
+      quotaUnits,
+    })
+  );
 }
 
 /**
- * DELETE /api/v1/youtube/comments/[id]?channelId=...
- * Delete a comment (id = commentId)
- * Quota cost: 50 units
+ * DELETE /api/v1/youtube/comments/[id]?channelId=...&videoId=...
+ * Delete a comment permanently (id = commentId)
+ * Quota cost: 51 units (1 snapshot read + 50 write)
  */
 export async function DELETE(
   request: NextRequest,
@@ -111,11 +92,13 @@ export async function DELETE(
   if (writeCheck) return writeCheck;
 
   const { id: commentId } = await params;
+  const endpoint = `/youtube/comments/${commentId}`;
   const { searchParams } = new URL(request.url);
   const channelId = searchParams.get("channelId");
+  const videoId = searchParams.get("videoId") || undefined;
 
   if (!channelId) {
-    await logRequest(ctx, `/youtube/comments/${commentId}`, "DELETE", 400, 0);
+    logRequest(ctx, endpoint, "DELETE", 400, 0);
     return NextResponse.json(
       apiError(
         "MISSING_PARAMETER",
@@ -127,29 +110,12 @@ export async function DELETE(
     );
   }
 
-  const tokens = await getChannelTokens(channelId, ctx.userId, ctx.organizationId);
-  if ("error" in tokens) {
-    await logRequest(ctx, `/youtube/comments/${commentId}`, "DELETE", tokens.status, 0);
-    return NextResponse.json(tokens.error, { status: tokens.status });
-  }
+  const result = await deleteComment(channelId, commentId, commentContext(ctx), { videoId });
+  if ("error" in result) return serviceErrorResponse(ctx, endpoint, "DELETE", result);
 
-  try {
-    await axios.delete(`${YOUTUBE_API_BASE}/comments`, {
-      params: { id: commentId },
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
-    });
-
-    await logRequest(ctx, `/youtube/comments/${commentId}`, "DELETE", 200, 50);
-    return NextResponse.json(apiSuccess({ deleted: true }, { quotaUnits: 50 }));
-  } catch (error) {
-    const mapped = mapYouTubeError(error);
-    await logRequest(
-      ctx,
-      `/youtube/comments/${commentId}`,
-      "DELETE",
-      mapped.status,
-      50
-    );
-    return NextResponse.json(mapped.body, { status: mapped.status });
-  }
+  const quotaUnits = creditsConsumedOf(result);
+  logRequest(ctx, endpoint, "DELETE", 200, quotaUnits);
+  return NextResponse.json(
+    apiSuccess({ deleted: true, editId: result.data.editId }, { quotaUnits })
+  );
 }

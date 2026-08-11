@@ -54,7 +54,9 @@ All REST API operations use the `/api/v1` base path and API-key authentication.
 - `GET /api/v1/videos/{id}/history`
 - `GET /api/v1/videos/{id}/retention`
 - `GET /api/v1/videos/{id}/variables`
+- `GET /api/v1/youtube/comments`
 - `GET /api/v1/youtube/comments/{id}`
+- `GET /api/v1/youtube/comments/edits`
 - `GET /api/v1/youtube/playlists`
 - `GET /api/v1/youtube/playlists/{id}`
 - `GET /api/v1/youtube/playlists/{id}/items`
@@ -70,6 +72,7 @@ All REST API operations use the `/api/v1` base path and API-key authentication.
 - `POST /api/v1/videos/{id}/check-drift`
 - `POST /api/v1/videos/{id}/history/{historyId}/revert`
 - `POST /api/v1/videos/{id}/resolve-drift`
+- `POST /api/v1/youtube/comments/bulk-update`
 - `POST /api/v1/youtube/comments/reply`
 - `POST /api/v1/youtube/playlists`
 - `POST /api/v1/youtube/playlists/{id}/items`
