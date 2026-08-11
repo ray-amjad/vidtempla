@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import Script from "next/script";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
+import { ThemeProvider } from "next-themes";
 import RootLayout from "@/components/layout/RootLayout";
 import { Toaster } from "@/components/ui/toaster";
 import { useUser } from "@/hooks/useUser";
@@ -26,12 +27,19 @@ function App({ Component, pageProps }: AppProps) {
 
   return (
     <PostHogProvider client={posthog}>
-      <RootLayout>
-        <div className="min-h-screen">
-          <Component {...pageProps} />
-          <Toaster />
-        </div>
-      </RootLayout>
+      <ThemeProvider
+        attribute="class"
+        defaultTheme="system"
+        enableSystem
+        disableTransitionOnChange
+      >
+        <RootLayout>
+          <div className="min-h-screen">
+            <Component {...pageProps} />
+            <Toaster />
+          </div>
+        </RootLayout>
+      </ThemeProvider>
 
       {/* AgentStack Widget */}
       <Script id="agentstack-init" strategy="lazyOnload">

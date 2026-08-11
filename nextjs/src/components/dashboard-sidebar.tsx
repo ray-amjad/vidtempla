@@ -45,6 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { ThemeToggle } from "./theme-toggle";
 import { useOptionalOrganization } from "@/contexts/OrganizationContext";
 import { authClient } from "@/lib/auth-client";
 import { useState, useEffect } from "react";
@@ -460,6 +461,13 @@ export default function DashboardSidebar() {
                     <CreditCard className="mr-2 h-4 w-4" />
                     <span>Billing</span>
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-1.5">
+                    <p className="text-muted-foreground mb-1.5 px-1 text-xs font-medium">
+                      Theme
+                    </p>
+                    <ThemeToggle />
+                  </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={signOut}>
                     <LogOut className="mr-2 h-4 w-4" />
