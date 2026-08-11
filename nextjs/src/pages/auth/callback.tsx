@@ -117,10 +117,10 @@ export default function AuthCallback() {
         <title>Completing Sign In...</title>
         <meta name="description" content="Completing your sign in" />
       </Head>
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-white to-gray-50">
+      <div className="bg-background flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-emerald-600 border-r-transparent"></div>
-          <p className="mt-4 text-gray-600">Completing sign in...</p>
+          <div className="border-primary inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-r-transparent"></div>
+          <p className="text-muted-foreground mt-4">Completing sign in...</p>
         </div>
       </div>
     </>
