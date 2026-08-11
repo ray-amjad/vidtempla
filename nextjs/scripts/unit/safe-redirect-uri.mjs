@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { getSafeRedirectUri } = await import("../src/utils/safeRedirectUri.ts");
+const { getSafeRedirectUri } = await import("../../src/utils/safeRedirectUri.ts");
 
 const BASE = "https://www.vidtempla.com";
 
