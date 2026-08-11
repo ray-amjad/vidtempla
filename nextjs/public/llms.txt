@@ -20,6 +20,7 @@
 - [Description update jobs](https://www.vidtempla.com/docs/manage/jobs): Track the background updates created by template, container, variable, and drift changes.
 - [Channels and sync](https://www.vidtempla.com/docs/manage/channels-and-sync): Connect channels, sync their videos, and understand what happens when a channel is disconnected.
 - [Manage videos](https://www.vidtempla.com/docs/manage/videos): Find synced videos, assign a description container, edit variables, and review managed-description status.
+- [Manage comments](https://www.vidtempla.com/docs/manage/comments): Search a channel's comments, reply to them, and rewrite or remove them in batches of up to 40.
 - [History, drift, and revert](https://www.vidtempla.com/docs/manage/history-and-drift): Compare saved description versions, resolve direct YouTube edits, and restore an earlier managed description.
 - [Connect an MCP client](https://www.vidtempla.com/docs/mcp/connect): Connect Claude Code or another Streamable HTTP MCP client to VidTempla.
 - [MCP tool families](https://www.vidtempla.com/docs/mcp/tool-reference): Choose the VidTempla MCP tool family that matches the YouTube or description-management task at hand.
