@@ -91,6 +91,59 @@ export function isYouTubeQuotaError(error: unknown): boolean {
 }
 
 /**
+ * The transient throttles: YouTube is refusing *right now* because calls arrived
+ * too fast, per-user or per-project, against a rolling ~100-second window. These
+ * clear on their own — they are NOT the daily quota, so a caller must not trip
+ * the daily breaker or quote a midnight reset for them. What they do mean is
+ * that hammering the next request is guaranteed waste, so a batch should stop.
+ *
+ * Deliberately disjoint from `isYouTubeQuotaError`: that one is 403 +
+ * `quotaExceeded`/`dailyLimitExceeded`, this one is HTTP 429 or an explicit
+ * rate-limit reason.
+ */
+const RATE_LIMIT_REASONS = new Set([
+  'rateLimitExceeded',
+  'rateLimitExceededUnreg',
+  'userRateLimitExceeded',
+  'userRateLimitExceededUnreg',
+]);
+
+export function isYouTubeRateLimitError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  if (error.response?.status === 429) return true;
+  const data = error.response?.data as
+    | { error?: { errors?: Array<{ reason?: string }> } }
+    | undefined;
+  return (data?.error?.errors ?? []).some(
+    (entry) => entry.reason !== undefined && RATE_LIMIT_REASONS.has(entry.reason)
+  );
+}
+
+/**
+ * Wall-clock ceiling on a single YouTube round-trip. Every comment call carries
+ * it, so a hung socket cannot silently eat a serverless function's whole budget
+ * and get the process killed mid-batch — which would strand `comment_edits`
+ * rows with no code left running to settle them (issue #135, I8/I11).
+ */
+export const YOUTUBE_CALL_TIMEOUT_MS = 15_000;
+
+/**
+ * True only when YouTube answered and refused: an HTTP 4xx carries a decision,
+ * so the request definitively did not take effect.
+ *
+ * Everything else is ambiguous — a socket hang-up, a timeout or a 5xx may mean
+ * the request arrived and was applied before the connection died. A caller that
+ * records what a write actually did (`comment_edits`, issue #135 I8/I11) must
+ * only mark a write `failed` when this returns true; otherwise it leaves the
+ * row `pending` and lets reconciliation compare the live text.
+ */
+export function isDefinitiveYouTubeRejection(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  return typeof status === 'number' && status >= 400 && status < 500;
+}
+
+/**
  * Custom type for OAuth 2.0 token response
  * Matches Google's standard OAuth token format
  */
@@ -658,14 +711,23 @@ export async function batchUpdateDescriptions(
 export interface YouTubeCommentThread {
   id: string;
   snippet: {
-    videoId: string;
+    /**
+     * Absent on a channel-level thread. `allThreadsRelatedToChannelId` returns
+     * threads *about* the channel alongside threads on its videos, and the
+     * former sit on no video at all — so every consumer has to cope with this
+     * being undefined rather than build a `?v=undefined` link.
+     */
+    videoId?: string;
     topLevelComment: {
       id: string;
       snippet: {
         textDisplay: string;
-        textOriginal: string;
+        // Author-only: YouTube returns textOriginal solely to the comment's
+        // author, so it is absent on third-party comments.
+        textOriginal?: string;
         authorDisplayName: string;
         authorProfileImageUrl: string;
+        authorChannelId?: { value: string };
         likeCount: number;
         publishedAt: string;
         updatedAt: string;
@@ -679,9 +741,10 @@ export interface YouTubeCommentThread {
       id: string;
       snippet: {
         textDisplay: string;
-        textOriginal: string;
+        textOriginal?: string;
         authorDisplayName: string;
         authorProfileImageUrl: string;
+        authorChannelId?: { value: string };
         likeCount: number;
         publishedAt: string;
         updatedAt: string;
@@ -695,12 +758,26 @@ export interface YouTubeComment {
   id: string;
   snippet: {
     textDisplay: string;
-    textOriginal: string;
+    // Author-only — see YouTubeCommentThread above.
+    textOriginal?: string;
     authorDisplayName: string;
-    parentId: string;
+    authorChannelId?: { value: string };
+    parentId?: string;
     publishedAt: string;
   };
 }
+
+/**
+ * `textFormat=plainText` on the display-facing reads.
+ *
+ * YouTube's default is `html`: `textDisplay` comes back with anchor tags and
+ * HTML entities, which every consumer here (the dashboard, which escapes JSX,
+ * and agents reading the REST/MCP surface) renders as literal markup. These
+ * calls only ever feed a display, so plain text is the honest format.
+ *
+ * `getCommentById` deliberately does NOT use it — see the note there.
+ */
+const DISPLAY_TEXT_FORMAT = 'plainText';
 
 /**
  * Lists comment threads for a video.
@@ -719,13 +796,153 @@ export async function listCommentThreads(
         videoId,
         maxResults: opts.maxResults ?? 20,
         order: opts.order ?? 'relevance',
+        textFormat: DISPLAY_TEXT_FORMAT,
         ...(opts.pageToken && { pageToken: opts.pageToken }),
       },
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
     }
   );
 
   return { items: response.data.items || [], nextPageToken: response.data.nextPageToken };
+}
+
+/**
+ * Searches comment threads across every video of a channel.
+ *
+ * Uses `allThreadsRelatedToChannelId`, which covers threads on the channel's
+ * videos as well as threads about the channel itself. `searchTerms` narrows to
+ * threads whose text matches — the primary use is finding every comment that
+ * contains a given URL.
+ *
+ * Quota cost: 1 unit per page (<= 100 items)
+ */
+export async function searchChannelCommentThreads(
+  accessToken: string,
+  channelId: string,
+  opts: {
+    searchTerms?: string;
+    maxResults?: number;
+    order?: string;
+    pageToken?: string;
+  } = {}
+): Promise<{ items: YouTubeCommentThread[]; nextPageToken?: string }> {
+  const response = await axios.get<{ items: YouTubeCommentThread[]; nextPageToken?: string }>(
+    `${YOUTUBE_API_BASE}/commentThreads`,
+    {
+      params: {
+        part: 'snippet,replies',
+        allThreadsRelatedToChannelId: channelId,
+        maxResults: opts.maxResults ?? 20,
+        order: opts.order ?? 'relevance',
+        textFormat: DISPLAY_TEXT_FORMAT,
+        ...(opts.searchTerms && { searchTerms: opts.searchTerms }),
+        ...(opts.pageToken && { pageToken: opts.pageToken }),
+      },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
+    }
+  );
+
+  return { items: response.data.items || [], nextPageToken: response.data.nextPageToken };
+}
+
+/**
+ * Fetches a single comment by ID.
+ *
+ * Returns null when the comment is not there. YouTube reports that two ways for
+ * a by-id lookup — an empty item list, and a documented 404 for an unknown
+ * comment id — and both mean the same thing to every caller, so both come back
+ * as null. Quota, auth and every other failure still throws.
+ *
+ * `snippet.textOriginal` is present only when the authenticated channel wrote
+ * the comment; for a third-party comment only `snippet.textDisplay` (HTML
+ * marked up) comes back.
+ *
+ * Unlike the listing calls this one keeps YouTube's default `html` text format.
+ * It is the snapshot read behind every destructive comment write, and for a
+ * third-party comment its `textDisplay` becomes the *only* surviving copy of
+ * the text (issue #135, I2/I2a). `plainText` would flatten anchors down to
+ * their link text, which YouTube truncates — so the audit record keeps the
+ * lossless markup and the display reads use `plainText` instead.
+ *
+ * Quota cost: 1 unit
+ */
+export async function getCommentById(
+  accessToken: string,
+  commentId: string
+): Promise<YouTubeComment | null> {
+  try {
+    const response = await axios.get<{ items?: YouTubeComment[] }>(
+      `${YOUTUBE_API_BASE}/comments`,
+      {
+        params: { part: 'snippet', id: commentId },
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
+      }
+    );
+
+    return response.data.items?.[0] ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * Lists the replies to a top-level comment.
+ *
+ * `commentThreads.list` inlines only a partial subset of replies, so a full
+ * thread needs this call.
+ *
+ * Quota cost: 1 unit per page (<= 100 items)
+ */
+export async function listCommentReplies(
+  accessToken: string,
+  parentId: string,
+  opts: { maxResults?: number; pageToken?: string } = {}
+): Promise<{ items: YouTubeComment[]; nextPageToken?: string }> {
+  const response = await axios.get<{ items?: YouTubeComment[]; nextPageToken?: string }>(
+    `${YOUTUBE_API_BASE}/comments`,
+    {
+      params: {
+        part: 'snippet',
+        parentId,
+        maxResults: opts.maxResults ?? 20,
+        textFormat: DISPLAY_TEXT_FORMAT,
+        ...(opts.pageToken && { pageToken: opts.pageToken }),
+      },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
+    }
+  );
+
+  return { items: response.data.items || [], nextPageToken: response.data.nextPageToken };
+}
+
+/**
+ * Posts a new top-level comment on a video.
+ * Quota cost: 50 units
+ */
+export async function postCommentThread(
+  accessToken: string,
+  videoId: string,
+  text: string
+): Promise<YouTubeCommentThread> {
+  const response = await axios.post<YouTubeCommentThread>(
+    `${YOUTUBE_API_BASE}/commentThreads`,
+    { snippet: { videoId, topLevelComment: { snippet: { textOriginal: text } } } },
+    {
+      params: { part: 'snippet' },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
+    }
+  );
+
+  return response.data;
 }
 
 /**
@@ -746,6 +963,7 @@ export async function replyToComment(
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
+      signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
     }
   );
 
@@ -770,6 +988,7 @@ export async function updateComment(
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
+      signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
     }
   );
   return response.data;
@@ -786,6 +1005,7 @@ export async function deleteComment(
   await axios.delete(`${YOUTUBE_API_BASE}/comments`, {
     params: { id: commentId },
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
   });
 }
 

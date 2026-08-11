@@ -159,6 +159,14 @@
       "coverage": { "rest": [], "mcp": [], "dashboard": [] }
     },
     {
+      "path": "/docs/manage/comments",
+      "title": "Manage comments",
+      "description": "Search a channel's comments, reply to them, and rewrite or remove them in batches of up to 40.",
+      "source": "src/pages/docs/manage/comments.tsx",
+      "section": "Manage",
+      "coverage": { "rest": [], "mcp": [], "dashboard": ["dashboard/youtube/comments"] }
+    },
+    {
       "path": "/docs/manage/history-and-drift",
       "title": "History, drift, and revert",
       "description": "Compare saved description versions, resolve direct YouTube edits, and restore an earlier managed description.",

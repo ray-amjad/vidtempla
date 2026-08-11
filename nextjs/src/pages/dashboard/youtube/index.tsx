@@ -12,6 +12,7 @@ import ChannelsTab from '@/components/youtube/ChannelsTab';
 import TemplatesTab from '@/components/youtube/TemplatesTab';
 import ContainersTab from '@/components/youtube/ContainersTab';
 import VideosTab from '@/components/youtube/VideosTab';
+import CommentsTab from '@/components/youtube/CommentsTab';
 import { useToast } from '@/hooks/use-toast';
 
 export default function YouTubePage() {
@@ -53,9 +54,10 @@ export default function YouTubePage() {
       >
         <div className="space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
               <TabsTrigger value="channels">Channels</TabsTrigger>
               <TabsTrigger value="videos">Videos</TabsTrigger>
+              <TabsTrigger value="comments">Comments</TabsTrigger>
               <TabsTrigger value="containers">Containers</TabsTrigger>
               <TabsTrigger value="templates">Templates</TabsTrigger>
             </TabsList>
@@ -66,6 +68,10 @@ export default function YouTubePage() {
 
             <TabsContent value="videos" className="mt-6">
               <VideosTab />
+            </TabsContent>
+
+            <TabsContent value="comments" className="mt-6">
+              <CommentsTab />
             </TabsContent>
 
             <TabsContent value="containers" className="mt-6">

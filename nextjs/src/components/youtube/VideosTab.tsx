@@ -40,9 +40,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Spinner } from "@/components/ui/spinner";
-import { Play, Edit, History, AlertTriangle } from 'lucide-react';
+import { Play, Edit, History, AlertTriangle, MessageSquare } from 'lucide-react';
 import EditVariablesSheet from './EditVariablesSheet';
 import HistoryDrawer from './HistoryDrawer';
+import CommentsDrawer from './CommentsDrawer';
 import { youtubeWatchUrl, youtubeThumbnailUrl } from '@/utils/youtubeUrls';
 import { formatDate, formatDateTime } from '@/lib/format';
 
@@ -61,6 +62,7 @@ export default function VideosTab() {
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [editVariablesOpen, setEditVariablesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<VideoWithRelations | null>(null);
   const [selectedContainerId, setSelectedContainerId] = useState('');
 
@@ -140,6 +142,11 @@ export default function VideosTab() {
   const openHistory = (video: VideoWithRelations) => {
     setSelectedVideo(video);
     setHistoryOpen(true);
+  };
+
+  const openComments = (video: VideoWithRelations) => {
+    setSelectedVideo(video);
+    setCommentsOpen(true);
   };
 
   return (
@@ -334,6 +341,14 @@ export default function VideosTab() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openComments(video)}
+                          title="Comments"
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                        </Button>
                         {!video.containerId ? (
                           <Button
                             size="sm"
@@ -448,6 +463,18 @@ export default function VideosTab() {
             open={historyOpen}
             onOpenChange={setHistoryOpen}
             onSuccess={refetch}
+          />
+        )}
+
+        {/* Comments Drawer */}
+        {selectedVideo && (
+          <CommentsDrawer
+            key={selectedVideo.id}
+            videoId={selectedVideo.id}
+            videoTitle={selectedVideo.title ?? 'Untitled Video'}
+            channelId={selectedVideo.channel.channelId}
+            open={commentsOpen}
+            onOpenChange={setCommentsOpen}
           />
         )}
       </CardContent>

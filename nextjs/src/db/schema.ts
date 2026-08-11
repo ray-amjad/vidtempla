@@ -640,3 +640,54 @@ export const descriptionPushJobItems = pgTable(
     jobIdIdx: index("description_push_job_items_job_id_idx").on(table.jobId),
   })
 );
+
+// One row per destructive YouTube comment write (update or delete), recorded
+// BEFORE the write reaches YouTube. `comments.update` overwrites textOriginal
+// in place and YouTube keeps no version history, so this table is the only
+// surviving copy of the prior text.
+//
+// Append-only: verb, textSource, beforeText and afterText are written once and
+// never modified; only `status` transitions (pending -> applied | failed |
+// unknown). Nothing references these rows, so nothing cascades from them.
+//
+// `textSource` records which YouTube field the snapshot captured. YouTube
+// returns snippet.textOriginal only to the comment's author, so a comment the
+// acting channel wrote snapshots as 'original' (byte-exact, restorable) while a
+// third-party comment snapshots as 'display' (HTML-marked-up, audit record
+// only — never a restore source).
+export const commentEdits = pgTable(
+  "comment_edits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: text("organization_id").references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    // The acting user. Kept as an audit record after the user is deleted.
+    userId: uuid("user_id").references(() => user.id, { onDelete: "set null" }),
+    // UC... channel whose token signed the write.
+    channelId: text("channel_id").notNull(),
+    commentId: text("comment_id").notNull(),
+    // Nullable: callers pass it through from search results when they have it.
+    videoId: text("video_id"),
+    // update | delete
+    verb: text("verb").notNull(),
+    // original | display
+    textSource: text("text_source").notNull(),
+    beforeText: text("before_text").notNull(),
+    // Null for verb = 'delete'.
+    afterText: text("after_text"),
+    // pending | applied | failed | unknown
+    status: text("status").notNull().default("pending"),
+    // mcp | rest | dashboard
+    source: text("source").notNull(),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    orgCreatedAtIdx: index("comment_edits_org_created_at_idx").on(
+      table.organizationId,
+      table.createdAt.desc()
+    ),
+  })
+);

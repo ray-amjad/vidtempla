@@ -4,17 +4,16 @@ import {
   requireWriteAccess,
   apiSuccess,
   apiError,
-  getChannelTokens,
   logRequest,
 } from "@/lib/api-auth";
-import { mapYouTubeError } from "@/lib/youtube-errors";
-import axios from "axios";
+import { commentContext, serviceErrorResponse } from "@/lib/api-comments";
+import { replyToComment } from "@/lib/services/comments";
 
-const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
+const ENDPOINT = "/youtube/comments/reply";
 
 /**
  * POST /api/v1/youtube/comments/reply
- * Reply to a comment
+ * Reply to a comment. New content, so no `comment_edits` snapshot is written.
  * Body: { channelId, parentId, text }
  * Quota cost: 50 units
  */
@@ -28,7 +27,7 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
-    await logRequest(ctx, "/youtube/comments/reply", "POST", 400, 0);
+    logRequest(ctx, ENDPOINT, "POST", 400, 0);
     return NextResponse.json(
       apiError(
         "INVALID_BODY",
@@ -43,7 +42,7 @@ export async function POST(request: NextRequest) {
   const { channelId, parentId, text } = body;
 
   if (!channelId || !parentId || !text) {
-    await logRequest(ctx, "/youtube/comments/reply", "POST", 400, 0);
+    logRequest(ctx, ENDPOINT, "POST", 400, 0);
     return NextResponse.json(
       apiError(
         "MISSING_PARAMETER",
@@ -55,35 +54,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const tokens = await getChannelTokens(channelId, ctx.userId, ctx.organizationId);
-  if ("error" in tokens) {
-    await logRequest(ctx, "/youtube/comments/reply", "POST", tokens.status, 0);
-    return NextResponse.json(tokens.error, { status: tokens.status });
-  }
+  const comments = commentContext(ctx);
+  const result = await replyToComment(channelId, parentId, text, comments);
+  if ("error" in result) return serviceErrorResponse(ctx, comments, ENDPOINT, "POST", result);
 
-  try {
-    const response = await axios.post(
-      `${YOUTUBE_API_BASE}/comments`,
-      {
-        snippet: {
-          parentId,
-          textOriginal: text,
-        },
-      },
-      {
-        params: { part: "snippet" },
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    await logRequest(ctx, "/youtube/comments/reply", "POST", 201, 50);
-    return NextResponse.json(apiSuccess(response.data, { quotaUnits: 50 }));
-  } catch (error) {
-    const mapped = mapYouTubeError(error);
-    await logRequest(ctx, "/youtube/comments/reply", "POST", mapped.status, 50);
-    return NextResponse.json(mapped.body, { status: mapped.status });
-  }
+  const quotaUnits = comments.meter.total;
+  logRequest(ctx, ENDPOINT, "POST", 200, quotaUnits);
+  return NextResponse.json(apiSuccess(result.data.comment, { quotaUnits }));
 }
