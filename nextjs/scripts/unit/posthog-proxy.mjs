@@ -7,7 +7,7 @@ const {
   buildResponseHeaders,
   buildUpstreamHeaders,
   buildUpstreamUrl,
-} = await import("../src/lib/posthog-proxy.ts");
+} = await import("../../src/lib/posthog-proxy.ts");
 
 test("API paths map to the ingestion host", () => {
   assert.equal(buildUpstreamUrl("/ingest/decide", "?v=3"), `${POSTHOG_API_HOST}/decide?v=3`);
