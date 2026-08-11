@@ -60,6 +60,29 @@ const CREDITS_PER_WRITE = 51;
 /** YouTube's per-page ceiling. Every page after the first is a credit the user asks for. */
 const PAGE_SIZE = 50;
 
+/**
+ * What stopped a batch early, in the user's terms. The three reasons need three
+ * different next actions, so they must not be collapsed into one message: only
+ * the daily quota is worth waiting until tomorrow for.
+ */
+function haltMessage(batch: BulkResult): string {
+  const skipped = 'The skipped comments were not attempted, so they cost nothing.';
+  switch (batch.halted) {
+    case 'quota':
+      return `The YouTube daily quota ran out. ${skipped} Quota resets ${
+        batch.resetsAt ? formatDate(batch.resetsAt) : 'at midnight Pacific'
+      }.`;
+    case 'rateLimit':
+      return `YouTube throttled the batch — a short-term limit, not the daily quota. ${skipped} Search again and rewrite them in about a minute.`;
+    case 'credits':
+      return `This workspace ran out of credits. ${skipped} Add credits, then search again and rewrite the rest.`;
+    case 'timeBudget':
+      return `The batch ran out of time before it reached every comment. ${skipped} Search again and rewrite the rest in a smaller batch.`;
+    default:
+      return '';
+  }
+}
+
 /** The exact input the search query runs with — the cache key has to match it. */
 const searchInputFor = (query: { channelId: string; searchTerms: string } | null) => ({
   channelId: query?.channelId ?? '',
@@ -119,6 +142,27 @@ export default function CommentsTab() {
     [search.data, removed]
   );
 
+  /**
+   * The channel the search ran as. Comments it did not write cannot be
+   * rewritten — a batch containing one aborts on the server with nothing
+   * written, naming a single ID, so the admin would deselect them one at a time
+   * and re-pay a read per item on every retry.
+   *
+   * The search deliberately still shows them: `allThreadsRelatedToChannelId`
+   * returns viewer comments alongside the channel's own, and deleting a
+   * third-party comment from your video is a supported action. Only the rewrite
+   * selection is restricted.
+   */
+  const isOwnComment = (thread: CommentThread) =>
+    query !== null &&
+    thread.snippet.topLevelComment.snippet.authorChannelId?.value === query.channelId;
+
+  const ownThreads = useMemo(
+    () => threads.filter(isOwnComment),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [threads, query]
+  );
+
   const runSearch = async () => {
     if (!activeChannelId) return;
     const next = { channelId: activeChannelId, searchTerms: searchInput.trim() };
@@ -145,12 +189,16 @@ export default function CommentsTab() {
   };
 
   const selectFirstBatch = () => {
-    setSelected(new Set(threads.slice(0, MAX_BULK_ITEMS).map((t) => t.snippet.topLevelComment.id)));
+    setSelected(
+      new Set(ownThreads.slice(0, MAX_BULK_ITEMS).map((t) => t.snippet.topLevelComment.id))
+    );
   };
 
   const handleBulkUpdate = async () => {
     if (!query) return;
-    const items = threads
+    // Filtered again here, not only at the checkbox: a selection made before a
+    // later page arrived must never smuggle a foreign comment into the batch.
+    const items = ownThreads
       .filter((thread) => selected.has(thread.snippet.topLevelComment.id))
       .slice(0, MAX_BULK_ITEMS)
       .map((thread) => ({
@@ -323,10 +371,7 @@ export default function CommentsTab() {
               {batch.reconciled.scanned > 0
                 ? `, including ${batch.reconciled.scanned} recovered record(s) from an interrupted batch`
                 : ''}
-              .{' '}
-              {batch.resetsAt
-                ? `The YouTube quota ran out — the skipped comments were not attempted. Quota resets ${formatDate(batch.resetsAt)}.`
-                : ''}
+              . {batch.halted ? haltMessage(batch) : ''}
             </p>
           </CardHeader>
           <CardContent className="space-y-1">
@@ -359,9 +404,9 @@ export default function CommentsTab() {
               {query ? `${threads.length} comment(s)` : 'Run a search to see comments.'}
             </p>
           </div>
-          {canManage && threads.length > 0 && (
+          {canManage && ownThreads.length > 0 && (
             <Button variant="outline" size="sm" onClick={selectFirstBatch}>
-              Select first {Math.min(threads.length, MAX_BULK_ITEMS)}
+              Select first {Math.min(ownThreads.length, MAX_BULK_ITEMS)}
             </Button>
           )}
         </CardHeader>
@@ -381,16 +426,21 @@ export default function CommentsTab() {
               {threads.map((thread) => {
                 const comment = thread.snippet.topLevelComment;
                 const commentId = comment.id;
+                const ownComment = isOwnComment(thread);
                 return (
                   <div key={commentId} className="flex gap-3 rounded-lg border border-border p-4">
-                    {canManage && (
-                      <Checkbox
-                        className="mt-1"
-                        checked={selected.has(commentId)}
-                        onCheckedChange={() => toggle(commentId)}
-                        aria-label="Select comment"
-                      />
-                    )}
+                    {canManage &&
+                      (ownComment ? (
+                        <Checkbox
+                          className="mt-1"
+                          checked={selected.has(commentId)}
+                          onCheckedChange={() => toggle(commentId)}
+                          aria-label="Select comment"
+                        />
+                      ) : (
+                        // Placeholder keeps the rows aligned with the selectable ones.
+                        <span className="mt-1 block h-4 w-4 shrink-0" aria-hidden="true" />
+                      ))}
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className="font-medium">{comment.snippet.authorDisplayName}</span>
@@ -405,14 +455,23 @@ export default function CommentsTab() {
                             {formatNumber(thread.snippet.totalReplyCount)} repl(ies)
                           </span>
                         )}
-                        <a
-                          href={youtubeWatchUrl(thread.snippet.videoId)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          Open video
-                        </a>
+                        {/* A channel-level thread sits on no video, so there is
+                            nothing to link to. */}
+                        {thread.snippet.videoId && (
+                          <a
+                            href={youtubeWatchUrl(thread.snippet.videoId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            Open video
+                          </a>
+                        )}
+                        {canManage && !ownComment && (
+                          <span className="text-muted-foreground">
+                            Written by someone else — can be deleted, not rewritten
+                          </span>
+                        )}
                       </div>
                       <p className="mt-2 whitespace-pre-wrap break-words text-sm">
                         {comment.snippet.textOriginal ?? comment.snippet.textDisplay}

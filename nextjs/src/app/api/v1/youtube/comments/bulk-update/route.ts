@@ -30,8 +30,10 @@ const BodySchema = bulkUpdateInputSchema;
  *
  * Every item's prior text is snapshotted before any write. If any comment is
  * missing or was not authored by `channelId`, the batch aborts and nothing is
- * written to YouTube. A YouTube quota halt stops the batch: earlier items stay
- * applied, the rest come back as `skipped` — resend those IDs to resume.
+ * written to YouTube. Three conditions stop the batch early — daily quota
+ * exhaustion, a transient YouTube throttle, and the batch's own time budget —
+ * each reported in `halted`. Earlier items stay applied, the rest come back as
+ * `skipped` and were never billed; resend those IDs to resume.
  *
  * Body: { channelId, items: [{ id, videoId?, text }] }
  * Quota cost: 51 units per item (1 snapshot read + 50 write), plus 1 per stale
@@ -78,10 +80,18 @@ export async function POST(request: NextRequest) {
   const result = await bulkUpdateComments(channelId, items, comments);
   if ("error" in result) return serviceErrorResponse(ctx, comments, ENDPOINT, "POST", result);
 
-  const { results, reconciled, resetsAt } = result.data;
+  const { results, reconciled, halted, resetsAt } = result.data;
   const quotaUnits = comments.meter.total;
   logRequest(ctx, ENDPOINT, "POST", 200, quotaUnits);
   return NextResponse.json(
-    apiSuccess({ results, reconciled, ...(resetsAt ? { resetsAt } : {}) }, { quotaUnits })
+    apiSuccess(
+      {
+        results,
+        reconciled,
+        ...(halted ? { halted } : {}),
+        ...(resetsAt ? { resetsAt } : {}),
+      },
+      { quotaUnits }
+    )
   );
 }

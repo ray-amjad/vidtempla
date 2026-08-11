@@ -12,6 +12,11 @@
  * Every procedure delegates to `services/comments.ts`, which owns credits and
  * `comment_edits` snapshots, and receives `source: 'dashboard'`.
  *
+ * Every procedure also goes through `metered`, which writes the `apiRequestLog`
+ * row that makes the spend visible to usage reporting — the dashboard is the
+ * first surface in the app to consume plan credits, and an unlogged call would
+ * report as zero usage.
+ *
  * Org isolation: the service resolves the channel token through
  * `getChannelTokens(channelId, userId, organizationId)`, which filters on the
  * active organization — a `UC…` id outside the workspace fails 404 before any
@@ -23,7 +28,7 @@ import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { db } from "@/db";
-import { youtubeChannels, youtubeVideos } from "@/db/schema";
+import { apiRequestLog, youtubeChannels, youtubeVideos } from "@/db/schema";
 import { orgProcedure, orgAdminProcedure, router } from "@/server/trpc/init";
 import {
   bulkUpdateComments,
@@ -65,13 +70,70 @@ function throwCommentServiceError(error: ServiceError): never {
   });
 }
 
-function commentContext(ctx: { user: { id: string }; organizationId: string }): CommentContext {
+type OrgCtx = { user: { id: string }; organizationId: string };
+
+function commentContext(ctx: OrgCtx): CommentContext {
   return {
     userId: ctx.user.id,
     organizationId: ctx.organizationId,
     source: "dashboard",
     meter: createCreditMeter(),
   };
+}
+
+/**
+ * Records what a dashboard call spent, the same way MCP and REST do.
+ *
+ * `apiKeys.getUsage` sums `apiRequestLog.quotaUnits` per org, so a surface that
+ * consumes plan credits without writing a row here reports zero usage — and
+ * these procedures are the first in the app to spend credits from the
+ * dashboard, up to 2040 in one bulk sweep. `source` is an unconstrained text
+ * column, so `'dashboard'` needs no schema change.
+ *
+ * Fire-and-forget, like `logMcpRequest`: losing a log line must not fail a call
+ * whose YouTube writes already happened.
+ */
+function logDashboardRequest(
+  ctx: OrgCtx,
+  procedure: string,
+  quotaUnits: number,
+  statusCode: number
+): void {
+  db.insert(apiRequestLog)
+    .values({
+      apiKeyId: null,
+      userId: ctx.user.id,
+      organizationId: ctx.organizationId,
+      endpoint: `comments.${procedure}`,
+      method: "TRPC",
+      statusCode,
+      quotaUnits,
+      source: "dashboard",
+    })
+    .then(() => {})
+    .catch((err) => console.error("Failed to log dashboard comment request:", err));
+}
+
+/**
+ * The shape every procedure below shares: build a context, run the service, log
+ * the credits it metered — on the error path too, where a call can bill for
+ * reads and then fail — and turn a service error into a tRPC one.
+ */
+async function metered<T>(
+  ctx: OrgCtx,
+  procedure: string,
+  call: (context: CommentContext) => Promise<ServiceResult<T>>
+): Promise<T> {
+  const context = commentContext(ctx);
+  const result = await call(context);
+  logDashboardRequest(
+    ctx,
+    procedure,
+    context.meter.total,
+    "error" in result ? result.error.status : 200
+  );
+  if ("error" in result) throwCommentServiceError(result.error);
+  return result.data;
 }
 
 /**
@@ -116,16 +178,16 @@ export const commentsRouter = router({
         ...pageSchema,
       })
     )
-    .query(async ({ ctx, input }) => {
-      const result = await searchChannelComments(input.channelId, commentContext(ctx), {
-        searchTerms: input.searchTerms,
-        order: input.order,
-        maxResults: input.maxResults,
-        pageToken: input.cursor,
-      });
-      if ("error" in result) throwCommentServiceError(result.error);
-      return result.data;
-    }),
+    .query(({ ctx, input }) =>
+      metered(ctx, "search", (context) =>
+        searchChannelComments(input.channelId, context, {
+          searchTerms: input.searchTerms,
+          order: input.order,
+          maxResults: input.maxResults,
+          pageToken: input.cursor,
+        })
+      )
+    ),
 
   /** Top-level threads on one managed video. 1 credit per page. */
   listForVideo: orgProcedure
@@ -138,13 +200,14 @@ export const commentsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const video = await resolveManagedVideo(input.videoId, ctx.organizationId);
-      const result = await listCommentThreads(video.channelId, video.videoId, commentContext(ctx), {
-        order: input.order,
-        maxResults: input.maxResults,
-        pageToken: input.cursor,
-      });
-      if ("error" in result) throwCommentServiceError(result.error);
-      return { ...result.data, channelId: video.channelId };
+      const data = await metered(ctx, "listForVideo", (context) =>
+        listCommentThreads(video.channelId, video.videoId, context, {
+          order: input.order,
+          maxResults: input.maxResults,
+          pageToken: input.cursor,
+        })
+      );
+      return { ...data, channelId: video.channelId };
     }),
 
   /** Full reply set of a thread — `commentThreads.list` inlines only a subset. 1 credit per page. */
@@ -156,14 +219,14 @@ export const commentsRouter = router({
         ...pageSchema,
       })
     )
-    .query(async ({ ctx, input }) => {
-      const result = await getCommentReplies(input.channelId, input.parentId, commentContext(ctx), {
-        maxResults: input.maxResults,
-        pageToken: input.cursor,
-      });
-      if ("error" in result) throwCommentServiceError(result.error);
-      return result.data;
-    }),
+    .query(({ ctx, input }) =>
+      metered(ctx, "getReplies", (context) =>
+        getCommentReplies(input.channelId, input.parentId, context, {
+          maxResults: input.maxResults,
+          pageToken: input.cursor,
+        })
+      )
+    ),
 
   /** Replies to a comment. New content, so no snapshot row. 50 credits. */
   reply: orgProcedure
@@ -174,16 +237,11 @@ export const commentsRouter = router({
         text: z.string().min(1).max(10000),
       })
     )
-    .mutation(async ({ ctx, input }) => {
-      const result = await replyToComment(
-        input.channelId,
-        input.parentId,
-        input.text,
-        commentContext(ctx)
-      );
-      if ("error" in result) throwCommentServiceError(result.error);
-      return result.data;
-    }),
+    .mutation(({ ctx, input }) =>
+      metered(ctx, "reply", (context) =>
+        replyToComment(input.channelId, input.parentId, input.text, context)
+      )
+    ),
 
   // ==================== Admin tier (destructive) ====================
 
@@ -194,11 +252,11 @@ export const commentsRouter = router({
    */
   bulkUpdate: orgAdminProcedure
     .input(bulkUpdateInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      const result = await bulkUpdateComments(input.channelId, input.items, commentContext(ctx));
-      if ("error" in result) throwCommentServiceError(result.error);
-      return result.data;
-    }),
+    .mutation(({ ctx, input }) =>
+      metered(ctx, "bulkUpdate", (context) =>
+        bulkUpdateComments(input.channelId, input.items, context)
+      )
+    ),
 
   /** Deletes a comment permanently (I4). Snapshotted first (I2). 51 credits. */
   delete: orgAdminProcedure
@@ -209,11 +267,9 @@ export const commentsRouter = router({
         videoId: z.string().optional(),
       })
     )
-    .mutation(async ({ ctx, input }) => {
-      const result = await deleteComment(input.channelId, input.commentId, commentContext(ctx), {
-        videoId: input.videoId,
-      });
-      if ("error" in result) throwCommentServiceError(result.error);
-      return result.data;
-    }),
+    .mutation(({ ctx, input }) =>
+      metered(ctx, "delete", (context) =>
+        deleteComment(input.channelId, input.commentId, context, { videoId: input.videoId })
+      )
+    ),
 });

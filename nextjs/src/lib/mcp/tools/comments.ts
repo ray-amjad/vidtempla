@@ -137,7 +137,16 @@ export function registerCommentTools(server: McpServer) {
       const userId = getSessionUserId();
       const context = ctx();
       const result = await replyToComment(channelId, parentId, text, context);
-      return finish(userId, "reply_to_comment", context, result);
+      // The service wraps the new comment in `{ comment }` for its own callers;
+      // this tool has always handed back the YouTube comment resource at the
+      // root, and the REST route unwraps it the same way. Serializing the
+      // envelope here instead would silently move every field one level deeper.
+      return finish(
+        userId,
+        "reply_to_comment",
+        context,
+        "error" in result ? result : { data: result.data.comment }
+      );
     }
   );
 

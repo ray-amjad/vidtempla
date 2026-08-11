@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, lt, or, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { commentEdits } from "@/db/schema";
 import { getChannelTokens } from "@/lib/api-auth";
@@ -14,6 +14,8 @@ import {
   deleteComment as ytDeleteComment,
   isDefinitiveYouTubeRejection,
   isYouTubeQuotaError,
+  isYouTubeRateLimitError,
+  YOUTUBE_CALL_TIMEOUT_MS,
   type YouTubeComment,
   type YouTubeCommentThread,
 } from "@/lib/clients/youtube";
@@ -50,8 +52,77 @@ export const BULK_MAX_ITEMS = 40;
 /** I11: only `pending` rows older than this are reconciled by phase 0. */
 const STALE_PENDING_MS = 10 * 60 * 1000;
 
+/**
+ * Wall clock a bulk batch allows itself, against the `maxDuration = 60` that
+ * every surface pins. A batch stops *starting* new YouTube calls once the next
+ * one could not finish inside the budget.
+ *
+ * This exists because of what a platform timeout kill costs here: the process
+ * dies mid-phase-2 with no code left running, so nothing finalizes the rows of
+ * items that were never sent and they are left `pending` — a state that claims
+ * a write might have happened when it provably did not. Stopping ourselves,
+ * one call's timeout short of the ceiling, turns that into an ordinary halt
+ * with `skipped` results and honestly `failed` rows.
+ */
+const BULK_BUDGET_MS = 55_000;
+
+/**
+ * ── The `comment_edits` status machine ──────────────────────────────────────
+ *
+ * `comment_edits` is the only surviving copy of a comment's prior text, so the
+ * one thing it must never do is claim a write happened when it did not — and
+ * the second thing is strand a row in a state nothing can ever resolve. Every
+ * transition in this file comes from exactly one of these rules (I8: status is
+ * the only column that ever changes).
+ *
+ *  `pending`  — inserted before the YouTube call, and left only when something
+ *               can still settle it: a phase-2 bulk row, which the next batch
+ *               for the same org+channel sweeps in phase 0 (I11).
+ *  `applied`  — the write returned success, or phase 0 found the live text
+ *               equal to `afterText` / the comment gone under `verb='delete'`.
+ *  `failed`   — the write provably never reached YouTube: it was never issued
+ *               (credit refusal, an abort before phase 2, a halt), or YouTube
+ *               answered 4xx (`isDefinitiveYouTubeRejection`), or phase 0 found
+ *               the live text still equal to `beforeText`.
+ *  `unknown`  — terminal "we cannot tell". Reached when a write's outcome is
+ *               ambiguous (timeout, 5xx, dropped socket) on a path no phase 0
+ *               will ever visit — the single-item verbs, since phase 0 runs
+ *               only inside `bulkUpdateComments` and there is no bulk delete —
+ *               and when phase 0 itself cannot decide.
+ *
+ * Where the evidence is genuinely ambiguous the answer is always `unknown`,
+ * never a status that asserts something. `unknown` is honest; a wrong `applied`
+ * hides a lost write, and a wrong `failed` feeds the restore path a `beforeText`
+ * that would push stale content back over a comment YouTube really did change.
+ */
+
+/** Whether a later phase 0 can still settle a row left `pending`. */
+type Reconcilable = "reconcilable" | "terminal";
+
 const DEFAULT_EDITS_LIMIT = 50;
 const MAX_EDITS_LIMIT = 100;
+
+/**
+ * The edit-log columns every surface may see — exactly the fields `openapi.yaml`
+ * documents for `GET /youtube/comments/edits`.
+ *
+ * Selected explicitly rather than with a bare `select()`: the row also carries
+ * `organizationId` and `userId`, which the published schema does not list and
+ * no caller needs, and a `select()` would leak whatever column is added next.
+ */
+const EDIT_LOG_COLUMNS = {
+  id: commentEdits.id,
+  channelId: commentEdits.channelId,
+  commentId: commentEdits.commentId,
+  videoId: commentEdits.videoId,
+  verb: commentEdits.verb,
+  textSource: commentEdits.textSource,
+  beforeText: commentEdits.beforeText,
+  afterText: commentEdits.afterText,
+  status: commentEdits.status,
+  source: commentEdits.source,
+  createdAt: commentEdits.createdAt,
+} as const;
 
 const UC_CHANNEL_ID = /^UC[\w-]{22}$/;
 
@@ -111,12 +182,35 @@ export type ReconcileCounts = {
   unknown: number;
 };
 
+/**
+ * Why a batch stopped before it reached the end of its items. Three genuinely
+ * different conditions that a single "quota" bucket would conflate:
+ *
+ *  - `quota`      — the *daily* Data API quota is exhausted. Nothing succeeds
+ *                   until Pacific midnight, so this trips the breaker and is
+ *                   the only reason that carries `resetsAt`.
+ *  - `rateLimit`  — a transient per-100-second throttle (429 /
+ *                   `rateLimitExceeded` / `userRateLimitExceeded`). Retrying in
+ *                   about a minute works, so it must not trip the daily breaker
+ *                   and must not quote a midnight reset. The batch still stops:
+ *                   a tight write loop cannot outlast the throttle window and
+ *                   would burn 50 credits per doomed item (I7/I10).
+ *  - `credits`    — the *workspace's* plan credits ran out (or the ledger was
+ *                   unreachable). Nothing to do with YouTube; kept separate so
+ *                   "wait for the Pacific reset" is never the advice for it.
+ *  - `timeBudget` — the batch ran out of wall clock and stopped itself rather
+ *                   than be killed mid-write by the platform.
+ */
+export type BulkHaltReason = "quota" | "rateLimit" | "credits" | "timeBudget";
+
 export interface BulkUpdateResult {
   results: BulkItemResult[];
   reconciled: ReconcileCounts;
   /** Kept on this one result because the workbench renders it. */
   creditsConsumed: number;
-  /** Present only when a YouTube quota halt stopped the batch. */
+  /** Present only when the batch stopped early; `skipped` items were never sent. */
+  halted?: BulkHaltReason;
+  /** Present only for a `quota` halt — a daily exhaustion is the only one with a reset. */
   resetsAt?: string;
 }
 
@@ -163,6 +257,47 @@ function insufficientCredits(): { error: ServiceError } {
   );
 }
 
+/**
+ * The envelope for our own failures — a token decrypt that threw, a credit
+ * ledger that was unreachable. Every surface contracts to return
+ * `{data, error, meta}`; letting one of these escape as a bare 500 breaks that
+ * contract *and* skips the caller's request log.
+ */
+function internalError(): { error: ServiceError } {
+  return fail(
+    "INTERNAL_ERROR",
+    "The comment service could not complete the request",
+    "Nothing was written to YouTube. Try again in a moment.",
+    500
+  );
+}
+
+/** `ok` billed, `insufficient` the balance is out, `error` the ledger threw. */
+type ChargeOutcome = "ok" | "insufficient" | "error";
+
+/**
+ * Consumes credits and records them on the caller's meter in one step, so the
+ * two can never drift. A throw from the ledger is folded into `error` rather
+ * than propagated: callers have snapshot rows to finalize before they return.
+ */
+async function chargeCredits(ctx: CommentContext, cost: number): Promise<ChargeOutcome> {
+  let success: boolean;
+  try {
+    ({ success } = await consumeCredits(ctx.organizationId, cost));
+  } catch (err) {
+    console.error("comments: credit ledger unavailable", err);
+    return "error";
+  }
+  if (!success) return "insufficient";
+  ctx.meter.charge(cost);
+  return "ok";
+}
+
+/** Maps a charge failure onto the envelope it deserves. */
+function chargeError(outcome: "insufficient" | "error"): { error: ServiceError } {
+  return outcome === "insufficient" ? insufficientCredits() : internalError();
+}
+
 /** Maps a thrown YouTube error into the service envelope. */
 function youtubeError(err: unknown): { error: ServiceError } {
   const mapped = mapYouTubeServiceError(err);
@@ -184,13 +319,24 @@ function youtubeError(err: unknown): { error: ServiceError } {
  * Resolves the channel token for a call: rejects anything that is not a UC...
  * ID (I9 — no `getAnyUserToken` fallback, so a read can never authenticate as
  * an arbitrary connected channel).
+ *
+ * `getChannelTokens` decrypts the stored token, and `decrypt` throws outright
+ * on a rotated `ENCRYPTION_KEY`. That throw is caught here rather than left to
+ * escape, because every caller's contract is an envelope: an uncaught throw
+ * would surface as a bare 500 with no `suggestion` and no request-log row.
  */
 async function resolveChannelToken(
   channelId: string,
   ctx: CommentContext
 ): Promise<{ accessToken: string } | { error: ServiceError }> {
   if (!UC_CHANNEL_ID.test(channelId)) return invalidChannel(channelId);
-  const tokens = await getChannelTokens(channelId, ctx.userId, ctx.organizationId);
+  let tokens: Awaited<ReturnType<typeof getChannelTokens>>;
+  try {
+    tokens = await getChannelTokens(channelId, ctx.userId, ctx.organizationId);
+  } catch (err) {
+    console.error("comments: failed to resolve the channel token", err);
+    return internalError();
+  }
   if ("error" in tokens) return tokenError(tokens);
   return { accessToken: tokens.accessToken };
 }
@@ -214,9 +360,8 @@ async function meteredCall<T>(
   const token = await resolveChannelToken(channelId, ctx);
   if ("error" in token) return token;
 
-  const credits = await consumeCredits(ctx.organizationId, cost);
-  if (!credits.success) return insufficientCredits();
-  ctx.meter.charge(cost);
+  const charge = await chargeCredits(ctx, cost);
+  if (charge !== "ok") return chargeError(charge);
 
   try {
     return { data: await call(token.accessToken) };
@@ -282,6 +427,9 @@ export async function getCommentReplies(
  * Reads the `comment_edits` audit trail for the organization. No YouTube call,
  * so 0 credits. Only `textSource: 'original'` rows are restorable (I2a) — a
  * `'display'` row is HTML-marked-up and is an audit record only.
+ *
+ * Returns the documented columns only, never the whole row: `organizationId`
+ * and `userId` are scope, not payload.
  */
 export async function listCommentEdits(
   ctx: CommentContext,
@@ -309,12 +457,20 @@ export async function listCommentEdits(
       }
       const cursorDate = cursor.key === null ? null : new Date(cursor.key);
       if (!cursorDate || Number.isNaN(cursorDate.getTime())) return invalidCursor();
-      // The cursor key is a millisecond-precision ISO string (node-postgres
-      // truncates the µs-precision timestamptz when it reads it), so an exact
-      // `created_at = cursorDate` tiebreaker would never match a row whose real
-      // value is e.g. T.123456 — dropping same-millisecond rows at the page
-      // boundary. Use a half-open millisecond window [cursorDate, cursorDate+1ms)
-      // for the id tiebreaker instead, which stays index-friendly.
+      // The cursor key can only ever carry millisecond precision: node-postgres
+      // truncates the µs-precision timestamptz when it reads it, so the exact
+      // stored value is not available to put in a cursor at all. The filter
+      // therefore buckets by millisecond — `created_at < cursorDate` is exactly
+      // "truncates below the cursor", and the half-open window
+      // [cursorDate, cursorDate+1ms) is exactly "truncates equal to it", where
+      // the id tiebreaker applies. Typed operators keep the Date encoders in
+      // play, and both comparisons stay index-friendly.
+      //
+      // `ORDER BY` below truncates to the same millisecond for exactly this
+      // reason. Ordering by the raw µs value would sort rows *within* a
+      // millisecond bucket by timestamp while the filter tiebreaks them by id —
+      // two disagreeing orders, under which a row can be skipped by every page
+      // or returned by two.
       const cursorDateNextMs = new Date(cursorDate.getTime() + 1);
       filters.push(
         or(
@@ -329,10 +485,15 @@ export async function listCommentEdits(
     }
 
     const rows = await db
-      .select()
+      .select(EDIT_LOG_COLUMNS)
       .from(commentEdits)
       .where(and(...filters))
-      .orderBy(desc(commentEdits.createdAt), desc(commentEdits.id))
+      // Millisecond-truncated, to agree with the cursor filter above. No value
+      // is interpolated here, so no encoder is bypassed.
+      .orderBy(
+        sql`date_trunc('milliseconds', ${commentEdits.createdAt}) desc`,
+        desc(commentEdits.id)
+      )
       .limit(limit + 1);
 
     const hasMore = rows.length > limit;
@@ -431,17 +592,29 @@ export async function updateComment(
   ctx: CommentContext,
   opts: { videoId?: string } = {}
 ): Promise<ServiceResult<{ comment: YouTubeComment; editId: string }>> {
+  // `youtube-errors.ts` maps every 403 by status alone, so "FORBIDDEN" on its
+  // own does not mean the authorship rule bit — a missing `youtube.force-ssl`
+  // scope earns the same code. The snapshot read has already told us who wrote
+  // the comment, for free, so only rewrite the suggestion when authorship
+  // really is the mismatch; otherwise sending the agent to re-check a channelId
+  // that was never the problem costs it another 51 credits.
+  let authoredByChannel: boolean | undefined;
+
   const result = await snapshottedWrite(channelId, commentId, ctx, {
     verb: "update",
     afterText: text,
     videoId: opts.videoId,
+    inspect: (comment) => {
+      const author = comment.snippet.authorChannelId?.value;
+      if (typeof author === "string") authoredByChannel = author === channelId;
+    },
     write: async (accessToken) => {
       const comment = await ytUpdateComment(accessToken, commentId, text);
       return { comment };
     },
   });
 
-  if ("error" in result && result.error.code === "FORBIDDEN") {
+  if ("error" in result && result.error.code === "FORBIDDEN" && authoredByChannel === false) {
     return { error: { ...result.error, suggestion: AUTHORSHIP_403_SUGGESTION } };
   }
   return result;
@@ -485,15 +658,16 @@ async function snapshottedWrite<T>(
     verb: "update" | "delete";
     afterText: string | null;
     videoId?: string;
+    /** Runs on the snapshot read's comment, before anything is written. */
+    inspect?: (comment: YouTubeComment) => void;
     write: (accessToken: string) => Promise<T>;
   }
 ): Promise<ServiceResult<T & { editId: string }>> {
   const token = await resolveChannelToken(channelId, ctx);
   if ("error" in token) return token;
 
-  const readCredits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-  if (!readCredits.success) return insufficientCredits();
-  ctx.meter.charge(READ_CREDITS);
+  const readCharge = await chargeCredits(ctx, READ_CREDITS);
+  if (readCharge !== "ok") return chargeError(readCharge);
 
   let comment: YouTubeComment | null;
   try {
@@ -503,6 +677,7 @@ async function snapshottedWrite<T>(
     return youtubeError(err);
   }
   if (!comment) return snapshotFailed(commentId);
+  spec.inspect?.(comment);
 
   const snapshot = snapshotOf(comment);
   let editId: string;
@@ -534,20 +709,22 @@ async function snapshottedWrite<T>(
     );
   }
 
-  const writeCredits = await consumeCredits(ctx.organizationId, WRITE_CREDITS);
-  if (!writeCredits.success) {
+  const writeCharge = await chargeCredits(ctx, WRITE_CREDITS);
+  if (writeCharge !== "ok") {
     // A known-unattempted write: the row can be finalized now.
     await setEditStatus(editId, "failed");
-    return insufficientCredits();
+    return chargeError(writeCharge);
   }
-  ctx.meter.charge(WRITE_CREDITS);
 
   try {
     const data = await spec.write(token.accessToken);
     await setEditStatus(editId, "applied");
     return { data: { ...data, editId } };
   } catch (err) {
-    await settleFailedWrite(editId, err);
+    // "terminal": phase 0 runs only inside `bulkUpdateComments`, so no sweep
+    // will ever visit a row this path leaves behind — least of all a `delete`
+    // row, since there is no bulk delete at all.
+    await settleFailedWrite(editId, err, "terminal");
     await noteQuotaHalt(err);
     return youtubeError(err);
   }
@@ -566,8 +743,10 @@ async function snapshottedWrite<T>(
  *  - **phase 2** performs the writes, one item at a time.
  *
  * Credits: 1 per reconciled row, then 51 per item (1 snapshot + 50 write),
- * charged as each item is attempted. A quota halt in phase 2 leaves earlier
- * items applied and returns the rest as `skipped` — resend those IDs to resume.
+ * charged as each item is attempted. A halt in phase 2 leaves earlier items
+ * applied and returns the rest as `skipped` — resend those IDs to resume.
+ * `halted` says which of the three conditions stopped it (`BulkHaltReason`);
+ * a halt in phase 0 or 1 aborts with nothing written at all.
  */
 export async function bulkUpdateComments(
   channelId: string,
@@ -606,6 +785,11 @@ export async function bulkUpdateComments(
 
   const reconciled: ReconcileCounts = { scanned: 0, applied: 0, failed: 0, unknown: 0 };
 
+  // Stop starting YouTube calls once the next one could not finish inside the
+  // budget. Being killed by the platform mid-phase-2 is the failure this avoids.
+  const budgetExpiresAt = Date.now() + BULK_BUDGET_MS;
+  const canStartCall = () => Date.now() + YOUTUBE_CALL_TIMEOUT_MS <= budgetExpiresAt;
+
   // ── Phase 0: reconcile stale pending rows (I11) ────────────
   let staleRows: Array<typeof commentEdits.$inferSelect>;
   try {
@@ -632,9 +816,12 @@ export async function bulkUpdateComments(
   }
 
   for (const row of staleRows) {
-    const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-    if (!credits.success) return insufficientCredits();
-    ctx.meter.charge(READ_CREDITS);
+    // The sweep is best-effort work the caller did not ask for, so it never
+    // eats the budget the batch itself needs.
+    if (!canStartCall()) break;
+
+    const charge = await chargeCredits(ctx, READ_CREDITS);
+    if (charge !== "ok") return chargeError(charge);
     reconciled.scanned += 1;
 
     let live: YouTubeComment | null;
@@ -643,16 +830,29 @@ export async function bulkUpdateComments(
       // as an empty item list or as a 404 — the client normalizes both.
       live = await ytGetCommentById(accessToken, row.commentId);
     } catch (err) {
-      if (isYouTubeQuotaError(err)) {
-        await markYouTubeQuotaExhausted();
-        return quotaHalted(reconciled);
+      const halt = haltReason(err);
+      if (halt) {
+        await noteBulkHalt(halt);
+        return haltedError(halt, reconciled);
       }
-      // A non-quota read failure leaves the row pending for a later batch.
+      // A row this sweep cannot read is settled rather than left behind. The
+      // select is `oldest first, limit 40` with nowhere to record an attempt
+      // (I8 allows no other column to change), so a permanently unreadable row
+      // — a 403 on a comment whose video went private — would otherwise sit at
+      // the head of every future batch: re-read, re-billed 1 credit, and
+      // blocking 1/40th of the sweep from ever reaching newer rows.
+      //
+      // A 4xx is YouTube's decision and will not change, so the truth about
+      // that row is permanently unavailable: `unknown`. A 5xx or a timeout is
+      // transient, so that one really can wait for the next batch.
+      if (isDefinitiveYouTubeRejection(err)) {
+        await setEditStatus(row.id, "unknown");
+        reconciled.unknown += 1;
+      }
       continue;
     }
 
     const status = reconcileStatus(row, live);
-    if (!status) continue;
     await setEditStatus(row.id, status);
     reconciled[status] += 1;
   }
@@ -673,17 +873,19 @@ export async function bulkUpdateComments(
   };
 
   for (const item of items) {
-    const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-    if (!credits.success) return abort(insufficientCredits());
-    ctx.meter.charge(READ_CREDITS);
+    if (!canStartCall()) return abort(outOfTimeError(reconciled));
+
+    const charge = await chargeCredits(ctx, READ_CREDITS);
+    if (charge !== "ok") return abort(chargeError(charge));
 
     let comment: YouTubeComment | null;
     try {
       comment = await ytGetCommentById(accessToken, item.id);
     } catch (err) {
-      if (isYouTubeQuotaError(err)) {
-        await markYouTubeQuotaExhausted();
-        return abort(quotaHalted(reconciled));
+      const halt = haltReason(err);
+      if (halt) {
+        await noteBulkHalt(halt);
+        return abort(haltedError(halt, reconciled));
       }
       return abort(youtubeError(err));
     }
@@ -735,50 +937,72 @@ export async function bulkUpdateComments(
   }
 
   // ── Phase 2: write ─────────────────────────────────────────
+  //
+  // Every stop below is a real stop. A throttle is as much a reason to stop as
+  // daily exhaustion: the remaining items would each pay 50 credits into a
+  // window this loop is far too fast to outlast (I7/I10). What differs is what
+  // the halt *means*, which is what `BulkHaltReason` carries back.
   const results: BulkItemResult[] = [];
   /** Rows for items the halt stopped us from ever sending. */
   const unattempted: string[] = [];
   let resetsAt: string | undefined;
-  let halted = false;
+  let halted: BulkHaltReason | undefined;
 
   for (const { item, editId } of snapshots) {
+    if (!halted && !canStartCall()) halted = "timeBudget";
+
     if (halted) {
       unattempted.push(editId);
       results.push({ id: item.id, status: "skipped" });
       continue;
     }
 
-    const credits = await consumeCredits(ctx.organizationId, WRITE_CREDITS);
-    if (!credits.success) {
-      // Every remaining item costs the same, so the balance cannot recover.
+    const charge = await chargeCredits(ctx, WRITE_CREDITS);
+    if (charge !== "ok") {
+      // Every remaining item costs the same, so the balance cannot recover;
+      // and a ledger that just threw will not answer the next item either.
       await setEditStatus(editId, "failed");
       results.push({
         id: item.id,
         status: "error",
-        error: { code: "QUOTA_EXCEEDED", message: "Insufficient credits" },
+        error:
+          charge === "insufficient"
+            ? { code: "QUOTA_EXCEEDED", message: "Insufficient credits" }
+            : { code: "INTERNAL_ERROR", message: "The credit ledger was unavailable" },
       });
-      halted = true;
+      halted = "credits";
       continue;
     }
-    ctx.meter.charge(WRITE_CREDITS);
 
     try {
       await ytUpdateComment(accessToken, item.id, item.text);
       await setEditStatus(editId, "applied");
       results.push({ id: item.id, status: "ok" });
     } catch (err) {
-      await settleFailedWrite(editId, err);
-      if (isYouTubeQuotaError(err)) {
-        await markYouTubeQuotaExhausted();
-        resetsAt = nextQuotaResetAt().toISOString();
-        halted = true;
+      // "reconcilable": this row is a bulk `update` for `channelId`, which is
+      // exactly what phase 0 of the next batch for this org and channel sweeps.
+      await settleFailedWrite(editId, err, "reconcilable");
+
+      const halt = haltReason(err);
+      if (halt) {
+        await noteBulkHalt(halt);
+        halted = halt;
+        if (halt === "quota") resetsAt = nextQuotaResetAt().toISOString();
         results.push({
           id: item.id,
           status: "error",
-          error: { code: "QUOTA_EXCEEDED", message: "YouTube Data API daily quota exceeded" },
+          error:
+            halt === "quota"
+              ? { code: "QUOTA_EXCEEDED", message: "YouTube Data API daily quota exceeded" }
+              : {
+                  code: "RATE_LIMITED",
+                  message:
+                    "YouTube API rate limit exceeded — a short-term throttle, not the daily quota. Resend the skipped IDs in about a minute.",
+                },
         });
         continue;
       }
+
       const mapped = mapYouTubeServiceError(err);
       results.push({
         id: item.id,
@@ -794,9 +1018,25 @@ export async function bulkUpdateComments(
       results,
       reconciled,
       creditsConsumed: ctx.meter.total,
+      ...(halted ? { halted } : {}),
       ...(resetsAt ? { resetsAt } : {}),
     },
   };
+}
+
+/**
+ * Phase 1 ran out of wall clock. Nothing has been written, and every snapshot
+ * row taken so far is finalized `failed` by the caller's `abort`. (Phase 0 has
+ * no items to abort, so it just stops sweeping and lets phase 1 proceed.)
+ */
+function outOfTimeError(reconciled: ReconcileCounts): { error: ServiceError } {
+  return fail(
+    "TIME_BUDGET_EXCEEDED",
+    "The batch ran out of time before any comment was written",
+    "Nothing was written to YouTube. Send a smaller batch — YouTube was answering more slowly than a full batch of 40 allows.",
+    504,
+    { reconciled }
+  );
 }
 
 // ── snapshot helpers ─────────────────────────────────────────
@@ -817,28 +1057,38 @@ function snapshotOf(comment: YouTubeComment): {
 }
 
 /**
- * I11: decides what a stranded `pending` row really was.
+ * I11: decides what a stranded `pending` row really was. Always returns a
+ * status — every stale row phase 0 reads is settled, never re-left `pending`.
  *
  * Live text matching `afterText` means the write landed; matching `beforeText`
  * means it did not; a comment that is gone under `verb='delete'` also landed.
  * Anything else is terminally `unknown` — a later manual edit is
  * indistinguishable from a partial write.
  *
- * Both live texts are candidates because `comments.list` is fetched without
- * `textFormat`, so `textDisplay` comes back HTML-marked-up and would not match
- * the plain text a write sent. Returns null to leave the row `pending`.
+ * The ambiguity is resolved *against* asserting a write. Where `afterText` and
+ * `beforeText` are the same string — a "rewrite" whose replacement text equals
+ * what was already there — the live text matches both and proves nothing, so
+ * neither branch may claim it; testing `afterText` first would silently stamp
+ * such a row `applied` for a write this invocation never issued.
+ *
+ * Both live texts are candidates because the snapshot read keeps YouTube's HTML
+ * `textFormat` (see `getCommentById`), so `textDisplay` would not match the
+ * plain text a write sent, while `textOriginal` would.
  */
 function reconcileStatus(
   row: typeof commentEdits.$inferSelect,
   live: YouTubeComment | null
-): "applied" | "failed" | "unknown" | null {
+): "applied" | "failed" | "unknown" {
   if (!live) return row.verb === "delete" ? "applied" : "unknown";
+
+  // Indistinguishable before and after: the live text is evidence for neither.
+  if (row.afterText !== null && row.afterText === row.beforeText) return "unknown";
 
   const candidates = [live.snippet.textOriginal, live.snippet.textDisplay].filter(
     (text): text is string => typeof text === "string"
   );
-  if (row.afterText !== null && candidates.includes(row.afterText)) return "applied";
   if (candidates.includes(row.beforeText)) return "failed";
+  if (row.afterText !== null && candidates.includes(row.afterText)) return "applied";
   return "unknown";
 }
 
@@ -846,15 +1096,35 @@ function reconcileStatus(
  * Settles a snapshot row after its YouTube write threw.
  *
  * Only a definitive rejection — YouTube answered with a 4xx — proves the
- * comment is untouched. A timeout, a dropped connection or a 5xx may have
- * arrived and been applied, so the row stays `pending` and phase 0 of the next
- * batch settles it against the live text (I11). Stamping `failed` on a write
- * that actually landed is the worse lie of the two: it is terminal, because
- * only `pending` rows reconcile, and it feeds the restore path `beforeText` to
- * push back over a comment YouTube really did change.
+ * comment is untouched, and that is the one case that may be stamped `failed`.
+ * A timeout, a dropped connection or a 5xx may have arrived and been applied,
+ * so the outcome is genuinely unknown, and what happens next depends on whether
+ * anything can still find out:
+ *
+ *  - `reconcilable` (a phase-2 row of a bulk batch) — leave it `pending`. Phase
+ *    0 of the next batch for the same org and channel reads the live text and
+ *    settles it properly (I11).
+ *  - `terminal` (the single-item verbs) — record `unknown`. Phase 0 runs only
+ *    inside `bulkUpdateComments`, filtered to one org and channel, and there is
+ *    no bulk delete and no scheduled sweep; `listCommentEdits` has no status
+ *    filter either, so a row left `pending` here would not even be findable.
+ *    Promising a reconciliation that cannot arrive is worse than admitting the
+ *    outcome is unknown.
+ *
+ * Guessing `failed` instead would be the worst of the three: it is terminal,
+ * and it feeds the restore path a `beforeText` to push back over a comment
+ * YouTube really did change.
  */
-async function settleFailedWrite(editId: string, err: unknown): Promise<void> {
-  if (isDefinitiveYouTubeRejection(err)) await setEditStatus(editId, "failed");
+async function settleFailedWrite(
+  editId: string,
+  err: unknown,
+  reconcilable: Reconcilable
+): Promise<void> {
+  if (isDefinitiveYouTubeRejection(err)) {
+    await setEditStatus(editId, "failed");
+    return;
+  }
+  if (reconcilable === "terminal") await setEditStatus(editId, "unknown");
 }
 
 async function setEditStatus(
@@ -902,20 +1172,60 @@ function snapshotFailed(
   );
 }
 
-function quotaHalted(reconciled: ReconcileCounts): { error: ServiceError } {
+/**
+ * Classifies a throw as one of the two conditions that must stop a batch, or
+ * neither. The order matters: daily exhaustion is checked first so it can never
+ * be mistaken for the throttle it outranks.
+ */
+function haltReason(err: unknown): "quota" | "rateLimit" | null {
+  if (isYouTubeQuotaError(err)) return "quota";
+  if (isYouTubeRateLimitError(err)) return "rateLimit";
+  return null;
+}
+
+/**
+ * Records a halt. Only *daily* exhaustion trips the breaker (I7) — a transient
+ * throttle clears in about a minute, and blocking every background sync until
+ * Pacific midnight over one is a far larger outage than the throttle itself.
+ *
+ * Never throws: it runs on error paths that still have snapshot rows to settle.
+ */
+async function noteBulkHalt(reason: "quota" | "rateLimit"): Promise<void> {
+  if (reason !== "quota") return;
+  try {
+    await markYouTubeQuotaExhausted();
+  } catch (err) {
+    console.error("comments: failed to record the YouTube quota halt", err);
+  }
+}
+
+/** The envelope for a halt that stopped a batch before any write landed. */
+function haltedError(
+  reason: "quota" | "rateLimit",
+  reconciled: ReconcileCounts
+): { error: ServiceError } {
+  if (reason === "quota") {
+    return fail(
+      "QUOTA_EXCEEDED",
+      "YouTube Data API daily quota exceeded",
+      "Nothing was written to YouTube. Retry after the quota resets.",
+      429,
+      { reconciled, resetsAt: nextQuotaResetAt().toISOString() }
+    );
+  }
+  // Deliberately no `resetsAt`: this is a rolling ~100-second throttle, not the
+  // daily quota, and reporting a midnight reset would send the caller away for
+  // hours over something that clears in a minute.
   return fail(
-    "QUOTA_EXCEEDED",
-    "YouTube Data API daily quota exceeded",
-    "Nothing was written to YouTube. Retry after the quota resets.",
+    "RATE_LIMITED",
+    "YouTube API rate limit exceeded",
+    "Nothing was written to YouTube. This is a short-term throttle, not the daily quota — wait about a minute and send the batch again.",
     429,
-    {
-      reconciled,
-      resetsAt: nextQuotaResetAt().toISOString(),
-    }
+    { reconciled }
   );
 }
 
-/** Trips the breaker when a call hits the daily quota (I7). */
+/** Trips the breaker when a single call hits the daily quota (I7). */
 async function noteQuotaHalt(err: unknown): Promise<void> {
-  if (isYouTubeQuotaError(err)) await markYouTubeQuotaExhausted();
+  if (isYouTubeQuotaError(err)) await noteBulkHalt("quota");
 }

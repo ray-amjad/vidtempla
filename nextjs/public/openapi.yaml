@@ -2685,9 +2685,19 @@ paths:
         every item; then it writes. If any comment is missing or was not authored by
         `channelId`, the batch aborts and **nothing** is written to YouTube.
 
-        If the YouTube daily quota runs out mid-batch, earlier items stay applied, the
-        failing item returns `QUOTA_EXCEEDED`, and the rest come back as `skipped` and were
-        never attempted. Send the skipped IDs again after the reset to resume.
+        Three conditions stop a batch mid-write. In each case earlier items stay applied,
+        the failing item carries the reason, and the rest come back as `skipped` — never
+        attempted and never billed. `halted` says which one it was, and the skipped IDs
+        are what you resend to resume:
+
+        - `quota` — the YouTube *daily* quota is exhausted. Terminal until the Pacific
+          midnight reset, whose time is in `resetsAt`. The item's error is `QUOTA_EXCEEDED`.
+        - `rateLimit` — a short-term YouTube throttle, not the daily quota. There is no
+          `resetsAt`, because waiting about a minute is enough. The item's error is
+          `RATE_LIMITED`.
+        - `credits` — the workspace ran out of plan credits. Nothing to do with YouTube.
+        - `timeBudget` — the batch ran out of wall clock and stopped itself rather than be
+          killed mid-write. Resend the skipped IDs in a smaller batch.
 
         Split larger sweeps into batches of 40 and loop.
       tags: [YouTube Comments]
@@ -2749,7 +2759,7 @@ paths:
                             status:
                               type: string
                               enum: [ok, error, skipped]
-                              description: skipped means the item was never attempted, after a quota halt
+                              description: skipped means the item was never attempted, after a halt — see `halted`
                             error:
                               type: object
                               properties:
@@ -2769,10 +2779,18 @@ paths:
                             type: integer
                           unknown:
                             type: integer
+                      halted:
+                        type: string
+                        enum: [quota, rateLimit, credits, timeBudget]
+                        description: |
+                          Present only when the batch stopped early. `quota` is YouTube daily
+                          exhaustion, `rateLimit` a transient YouTube throttle that clears in
+                          about a minute, `credits` the workspace's own plan balance running
+                          out, `timeBudget` the batch running out of wall clock.
                       resetsAt:
                         type: string
                         format: date-time
-                        description: Present only when a YouTube quota halt stopped the batch
+                        description: Present only for a `quota` halt — daily exhaustion is the only reason with a reset
                   error:
                     type: "null"
                   meta:
@@ -2806,9 +2824,26 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "429":
-          $ref: "#/components/responses/QuotaExceeded"
+          description: |
+            Out of plan credits, or YouTube stopped the batch before any write landed —
+            `QUOTA_EXCEEDED` for daily exhaustion (with `meta.resetsAt`), `RATE_LIMITED`
+            for a transient throttle that clears in about a minute. Nothing was written
+            to YouTube.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           $ref: "#/components/responses/InternalError"
+        "504":
+          description: |
+            `TIME_BUDGET_EXCEEDED` — YouTube was answering too slowly for the batch to
+            finish, so it stopped before writing anything. Nothing was written to
+            YouTube. Retry with fewer items.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /youtube/comments/edits:
     get:
@@ -2824,8 +2859,12 @@ paths:
         only. Restoring is a normal write at 51 units per comment, not a free rollback.
 
         `status` is `pending` while a write is in flight, then `applied` or `failed`.
-        A row stuck at `pending` is resolved by the next bulk update for the same channel;
-        `unknown` means that reconciliation could not tell what happened.
+        `failed` means the write provably never reached YouTube, so the comment still holds
+        `beforeText`. A row left `pending` by an interrupted bulk update is resolved by the
+        next bulk update for the same channel. `unknown` is terminal: nothing can establish
+        what happened, either because the write's outcome was ambiguous on a path no
+        reconciliation reaches, or because reconciliation ran and could not decide. A row
+        never claims a write that may not have happened.
 
         No YouTube call, so no quota is consumed.
       tags: [YouTube Comments]

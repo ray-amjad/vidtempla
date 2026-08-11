@@ -117,6 +117,12 @@ export default function CommentsDrawer({
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [removed, setRemoved] = useState<Set<string>>(new Set());
+  /**
+   * Replies posted in this session, per parent id. The listing's
+   * `totalReplyCount` is a snapshot from the read that fetched it and never
+   * refreshes, so this is added on top of it to keep "Show replies" reachable.
+   */
+  const [extraReplies, setExtraReplies] = useState<Map<string, number>>(new Map());
 
   const utils = api.useUtils();
 
@@ -171,6 +177,13 @@ export default function CommentsDrawer({
           };
         }
       );
+      // "Show replies" only renders when the thread reports replies, and the
+      // count came from a read that predates this one. On a thread that had
+      // none, leaving it at 0 hides the reply behind a button that never
+      // appears — with no refetch, no GC while the drawer stays mounted, and no
+      // way back short of paying for the listing again. The user pays 50
+      // credits, sees a success toast, sees nothing change, and posts it twice.
+      setExtraReplies((prev) => new Map(prev).set(parentId, (prev.get(parentId) ?? 0) + 1));
       toast({ title: 'Reply posted', description: '50 credits used.' });
       setReplyingTo(null);
       setReplyText('');
@@ -183,7 +196,9 @@ export default function CommentsDrawer({
     }
   };
 
-  const handleDelete = async (commentId: string, ytVideoId: string) => {
+  // `ytVideoId` is optional only because the thread type has to allow a
+  // channel-level thread; every thread this drawer lists sits on a video.
+  const handleDelete = async (commentId: string, ytVideoId?: string) => {
     try {
       await deleteMutation.mutateAsync({ channelId, commentId, videoId: ytVideoId });
       setRemoved((prev) => new Set(prev).add(commentId));
@@ -222,6 +237,8 @@ export default function CommentsDrawer({
             threads.map((thread) => {
               const comment = thread.snippet.topLevelComment;
               const isExpanded = expanded.has(thread.id);
+              const replyCount =
+                thread.snippet.totalReplyCount + (extraReplies.get(comment.id) ?? 0);
               return (
                 <div key={thread.id} className="rounded-lg border border-border p-4">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -249,11 +266,11 @@ export default function CommentsDrawer({
                       <MessageSquare className="mr-2 h-4 w-4" />
                       Reply
                     </Button>
-                    {thread.snippet.totalReplyCount > 0 && (
+                    {replyCount > 0 && (
                       <Button size="sm" variant="outline" onClick={() => toggleReplies(thread.id)}>
                         {isExpanded
                           ? 'Hide replies'
-                          : `Show ${formatNumber(thread.snippet.totalReplyCount)} repl(ies) (1 credit)`}
+                          : `Show ${formatNumber(replyCount)} repl(ies) (1 credit)`}
                       </Button>
                     )}
                     {canManage && (

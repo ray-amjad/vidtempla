@@ -34,10 +34,18 @@ export default function CommentsPage() {
         likes, and its original date; deleting and posting again does not.
       </p>
       <p>
+        You can only rewrite comments the connected channel wrote. A channel
+        search also finds comments from viewers; those cannot be selected for a
+        rewrite, but you can still delete them.
+      </p>
+      <p>
         Each rewritten comment costs 51 credits: 1 to read the previous text and
-        50 to write the new text. If the daily YouTube quota runs out during a
-        batch, the batch stops. The comments that were not attempted are
-        reported as skipped, and you can send them again later.
+        50 to write the new text. A batch stops early for three reasons: the
+        daily YouTube quota ran out, YouTube applied a short-term limit, or the
+        batch ran out of time. The comments that were not attempted are reported
+        as skipped and cost nothing, and you can send them again later. The
+        message on the last batch tells you which of the three happened and how
+        long to wait.
       </p>
       <h2>Delete a comment</h2>
       <p>
