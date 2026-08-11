@@ -94,19 +94,11 @@ const config = {
     };
     return config;
   },
-  // PostHog rewrites for API and assets
-  async rewrites() {
-    return [
-      {
-        source: "/ingest/static/:path*",
-        destination: "https://us-assets.i.posthog.com/static/:path*",
-      },
-      {
-        source: "/ingest/:path*",
-        destination: "https://us.i.posthog.com/:path*",
-      },
-    ];
-  },
+  // PostHog is proxied by src/app/ingest/[...path]/route.ts rather than by a
+  // rewrite. An external rewrite forwards inbound headers verbatim, which sent
+  // the app's own session cookie to a third-party host; the route handler
+  // builds the outbound headers from an allowlist instead.
+  //
   // This is required to support PostHog trailing slash API requests
   skipTrailingSlashRedirect: true,
 };
