@@ -663,9 +663,12 @@ export interface YouTubeCommentThread {
       id: string;
       snippet: {
         textDisplay: string;
-        textOriginal: string;
+        // Author-only: YouTube returns textOriginal solely to the comment's
+        // author, so it is absent on third-party comments.
+        textOriginal?: string;
         authorDisplayName: string;
         authorProfileImageUrl: string;
+        authorChannelId?: { value: string };
         likeCount: number;
         publishedAt: string;
         updatedAt: string;
@@ -679,9 +682,10 @@ export interface YouTubeCommentThread {
       id: string;
       snippet: {
         textDisplay: string;
-        textOriginal: string;
+        textOriginal?: string;
         authorDisplayName: string;
         authorProfileImageUrl: string;
+        authorChannelId?: { value: string };
         likeCount: number;
         publishedAt: string;
         updatedAt: string;
@@ -695,9 +699,11 @@ export interface YouTubeComment {
   id: string;
   snippet: {
     textDisplay: string;
-    textOriginal: string;
+    // Author-only — see YouTubeCommentThread above.
+    textOriginal?: string;
     authorDisplayName: string;
-    parentId: string;
+    authorChannelId?: { value: string };
+    parentId?: string;
     publishedAt: string;
   };
 }
@@ -726,6 +732,124 @@ export async function listCommentThreads(
   );
 
   return { items: response.data.items || [], nextPageToken: response.data.nextPageToken };
+}
+
+/**
+ * Searches comment threads across every video of a channel.
+ *
+ * Uses `allThreadsRelatedToChannelId`, which covers threads on the channel's
+ * videos as well as threads about the channel itself. `searchTerms` narrows to
+ * threads whose text matches — the primary use is finding every comment that
+ * contains a given URL.
+ *
+ * Quota cost: 1 unit per page (<= 100 items)
+ */
+export async function searchChannelCommentThreads(
+  accessToken: string,
+  channelId: string,
+  opts: {
+    searchTerms?: string;
+    maxResults?: number;
+    order?: string;
+    pageToken?: string;
+  } = {}
+): Promise<{ items: YouTubeCommentThread[]; nextPageToken?: string }> {
+  const response = await axios.get<{ items: YouTubeCommentThread[]; nextPageToken?: string }>(
+    `${YOUTUBE_API_BASE}/commentThreads`,
+    {
+      params: {
+        part: 'snippet,replies',
+        allThreadsRelatedToChannelId: channelId,
+        maxResults: opts.maxResults ?? 20,
+        order: opts.order ?? 'relevance',
+        ...(opts.searchTerms && { searchTerms: opts.searchTerms }),
+        ...(opts.pageToken && { pageToken: opts.pageToken }),
+      },
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  return { items: response.data.items || [], nextPageToken: response.data.nextPageToken };
+}
+
+/**
+ * Fetches a single comment by ID.
+ *
+ * Returns null when YouTube responds with an empty item list — a comment that
+ * does not exist (or was deleted) is reported that way rather than as a 404.
+ *
+ * `snippet.textOriginal` is present only when the authenticated channel wrote
+ * the comment; for a third-party comment only `snippet.textDisplay` (HTML
+ * marked up) comes back.
+ *
+ * Quota cost: 1 unit
+ */
+export async function getCommentById(
+  accessToken: string,
+  commentId: string
+): Promise<YouTubeComment | null> {
+  const response = await axios.get<{ items?: YouTubeComment[] }>(
+    `${YOUTUBE_API_BASE}/comments`,
+    {
+      params: { part: 'snippet', id: commentId },
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  return response.data.items?.[0] ?? null;
+}
+
+/**
+ * Lists the replies to a top-level comment.
+ *
+ * `commentThreads.list` inlines only a partial subset of replies, so a full
+ * thread needs this call.
+ *
+ * Quota cost: 1 unit per page (<= 100 items)
+ */
+export async function listCommentReplies(
+  accessToken: string,
+  parentId: string,
+  opts: { maxResults?: number; pageToken?: string } = {}
+): Promise<{ items: YouTubeComment[]; nextPageToken?: string }> {
+  const response = await axios.get<{ items?: YouTubeComment[]; nextPageToken?: string }>(
+    `${YOUTUBE_API_BASE}/comments`,
+    {
+      params: {
+        part: 'snippet',
+        parentId,
+        maxResults: opts.maxResults ?? 20,
+        ...(opts.pageToken && { pageToken: opts.pageToken }),
+      },
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  return { items: response.data.items || [], nextPageToken: response.data.nextPageToken };
+}
+
+/**
+ * Posts a new top-level comment on a video.
+ * Quota cost: 50 units
+ */
+export async function postCommentThread(
+  accessToken: string,
+  videoId: string,
+  text: string
+): Promise<YouTubeCommentThread> {
+  const response = await axios.post<YouTubeCommentThread>(
+    `${YOUTUBE_API_BASE}/commentThreads`,
+    { snippet: { videoId, topLevelComment: { snippet: { textOriginal: text } } } },
+    {
+      params: { part: 'snippet' },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  return response.data;
 }
 
 /**
