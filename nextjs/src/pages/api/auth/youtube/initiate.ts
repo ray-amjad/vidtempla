@@ -4,6 +4,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { auth } from '@/lib/auth';
+import { fromNodeHeaders } from 'better-auth/node';
 import { getOAuthUrl } from '@/lib/clients/youtube';
 
 export default async function handler(
@@ -12,6 +14,18 @@ export default async function handler(
 ) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Only a signed-in user may start a channel connection. The callback needs a
+  // session anyway, so an anonymous caller could never finish this flow.
+  const session = await auth.api.getSession({
+    headers: fromNodeHeaders(req.headers),
+  });
+
+  if (!session) {
+    return res.redirect(
+      '/sign-in?returnTo=' + encodeURIComponent('/dashboard/youtube')
+    );
   }
 
   try {
