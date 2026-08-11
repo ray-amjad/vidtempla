@@ -9,7 +9,7 @@ const {
   createOAuthState,
   serializeStateCookie,
   verifyOAuthState,
-} = await import("../src/lib/youtube-oauth-state.ts");
+} = await import("../../src/lib/youtube-oauth-state.ts");
 
 test("a freshly minted state verifies against its own cookie", () => {
   const { state, cookieValue } = createOAuthState();

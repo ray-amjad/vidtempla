@@ -12,7 +12,7 @@
     "test:docs-coverage-mutation": "node scripts/test-docs-coverage.mjs",
     "test:org-guards": "node scripts/check-youtube-router-org-guards.mjs",
     "test:encryption": "node --experimental-strip-types --test scripts/test-encryption.mjs",
-    "test:youtube-oauth-state": "node --experimental-strip-types --test scripts/test-youtube-oauth-state.mjs",
+    "test:unit": "node --experimental-strip-types --test scripts/unit/*.mjs",
     "start": "next start"
   },
   "dependencies": {
