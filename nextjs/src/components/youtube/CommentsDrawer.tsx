@@ -52,21 +52,33 @@ const PAID_QUERY_OPTIONS = {
   retry: false,
 } as const;
 
+/** YouTube's per-page ceiling. Every page after the first is a credit the user asks for. */
+const PAGE_SIZE = 50;
+
+/** The cache key of one thread's replies — must match what `ThreadReplies` queries. */
+const repliesInput = (channelId: string, parentId: string) => ({
+  channelId,
+  parentId,
+  maxResults: PAGE_SIZE,
+});
+
 /** Replies live behind their own paid read — `commentThreads.list` inlines only a subset. */
 function ThreadReplies({ channelId, parentId }: { channelId: string; parentId: string }) {
-  const { data, isLoading, error } = api.dashboard.comments.getReplies.useQuery(
-    { channelId, parentId, maxResults: 50 },
-    PAID_QUERY_OPTIONS
-  );
+  const { data, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage } =
+    api.dashboard.comments.getReplies.useInfiniteQuery(repliesInput(channelId, parentId), {
+      getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+      ...PAID_QUERY_OPTIONS,
+    });
+
+  const replies = data?.pages.flatMap((page) => page.items) ?? [];
 
   if (isLoading) return <Spinner className="h-4 w-4 text-muted-foreground" />;
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
-  if (!data || data.items.length === 0)
-    return <p className="text-sm text-muted-foreground">No replies.</p>;
+  if (replies.length === 0) return <p className="text-sm text-muted-foreground">No replies.</p>;
 
   return (
     <div className="space-y-2">
-      {data.items.map((reply) => (
+      {replies.map((reply) => (
         <div key={reply.id} className="rounded border border-border p-2">
           <div className="text-sm font-medium">{reply.snippet.authorDisplayName}</div>
           <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -74,6 +86,17 @@ function ThreadReplies({ channelId, parentId }: { channelId: string; parentId: s
           </p>
         </div>
       ))}
+      {hasNextPage && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
+        >
+          {isFetchingNextPage && <Spinner className="mr-2 h-4 w-4" />}
+          Load more replies (1 credit)
+        </Button>
+      )}
     </div>
   );
 }
@@ -95,15 +118,22 @@ export default function CommentsDrawer({
   const [replyText, setReplyText] = useState('');
   const [removed, setRemoved] = useState<Set<string>>(new Set());
 
-  const { data, isLoading, error } = api.dashboard.comments.listForVideo.useQuery(
-    { videoId, maxResults: 50 },
-    { enabled: open, ...PAID_QUERY_OPTIONS }
-  );
+  const utils = api.useUtils();
+
+  const { data, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage } =
+    api.dashboard.comments.listForVideo.useInfiniteQuery(
+      { videoId, maxResults: PAGE_SIZE },
+      {
+        enabled: open,
+        getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
+        ...PAID_QUERY_OPTIONS,
+      }
+    );
 
   const replyMutation = api.dashboard.comments.reply.useMutation();
   const deleteMutation = api.dashboard.comments.delete.useMutation();
 
-  const threads = (data?.items ?? []).filter(
+  const threads = (data?.pages.flatMap((page) => page.items) ?? []).filter(
     (thread) => !removed.has(thread.snippet.topLevelComment.id)
   );
 
@@ -118,7 +148,29 @@ export default function CommentsDrawer({
 
   const handleReply = async (parentId: string) => {
     try {
-      await replyMutation.mutateAsync({ channelId, parentId, text: replyText });
+      const { comment } = await replyMutation.mutateAsync({
+        channelId,
+        parentId,
+        text: replyText,
+      });
+      // The reply list is a paid read that never refetches on its own, so the
+      // new reply has to be put into the cache by hand — otherwise it stays
+      // invisible until the user pays to load the page again. When the replies
+      // were never expanded there is no cache to seed, and seeding one would
+      // pass off a single reply as the whole thread, so leave it untouched.
+      utils.dashboard.comments.getReplies.setInfiniteData(
+        repliesInput(channelId, parentId),
+        (previous) => {
+          if (!previous || previous.pages.length === 0) return previous;
+          const lastIndex = previous.pages.length - 1;
+          return {
+            ...previous,
+            pages: previous.pages.map((page, index) =>
+              index === lastIndex ? { ...page, items: [...page.items, comment] } : page
+            ),
+          };
+        }
+      );
       toast({ title: 'Reply posted', description: '50 credits used.' });
       setReplyingTo(null);
       setReplyText('');
@@ -269,6 +321,19 @@ export default function CommentsDrawer({
                 </div>
               );
             })
+          )}
+
+          {hasNextPage && (
+            <div className="flex justify-center pt-2">
+              <Button
+                variant="outline"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+              >
+                {isFetchingNextPage && <Spinner className="mr-2 h-4 w-4" />}
+                Load more comments (1 credit)
+              </Button>
+            </div>
           )}
         </div>
       </SheetContent>

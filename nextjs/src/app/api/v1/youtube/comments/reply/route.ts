@@ -7,7 +7,7 @@ import {
   logRequest,
 } from "@/lib/api-auth";
 import { commentContext, serviceErrorResponse } from "@/lib/api-comments";
-import { creditsConsumedOf, replyToComment } from "@/lib/services/comments";
+import { replyToComment } from "@/lib/services/comments";
 
 const ENDPOINT = "/youtube/comments/reply";
 
@@ -54,10 +54,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const result = await replyToComment(channelId, parentId, text, commentContext(ctx));
-  if ("error" in result) return serviceErrorResponse(ctx, ENDPOINT, "POST", result);
+  const comments = commentContext(ctx);
+  const result = await replyToComment(channelId, parentId, text, comments);
+  if ("error" in result) return serviceErrorResponse(ctx, comments, ENDPOINT, "POST", result);
 
-  const quotaUnits = creditsConsumedOf(result);
+  const quotaUnits = comments.meter.total;
   logRequest(ctx, ENDPOINT, "POST", 200, quotaUnits);
   return NextResponse.json(apiSuccess(result.data.comment, { quotaUnits }));
 }

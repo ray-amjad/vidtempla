@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiError, logRequest, type ApiContext } from "@/lib/api-auth";
-import { creditsConsumedOf, type CommentContext } from "@/lib/services/comments";
+import { createCreditMeter, type CommentContext } from "@/lib/services/comments";
 import type { ServiceResult } from "@/lib/services/types";
 
 /**
@@ -8,7 +8,7 @@ import type { ServiceResult } from "@/lib/services/types";
  *
  * The service owns credits and `comment_edits` snapshots (issue #135, I9/I10),
  * so routes never call `consumeCredits` — they only shape the request, log the
- * credits the service reports, and render the envelope.
+ * credits the service metered, and render the envelope.
  */
 
 /** A REST call acts as the key's user and org; snapshot rows record `source: 'rest'`. */
@@ -17,6 +17,7 @@ export function commentContext(auth: ApiContext): CommentContext {
     userId: auth.userId,
     organizationId: auth.organizationId,
     source: "rest",
+    meter: createCreditMeter(),
   };
 }
 
@@ -29,12 +30,13 @@ type ServiceFailure = Extract<ServiceResult<unknown>, { error: unknown }>;
  */
 export function serviceErrorResponse(
   auth: ApiContext,
+  comments: CommentContext,
   endpoint: string,
   method: string,
   result: ServiceFailure
 ): NextResponse {
   const { code, message, suggestion, status, meta } = result.error;
-  logRequest(auth, endpoint, method, status, creditsConsumedOf(result));
+  logRequest(auth, endpoint, method, status, comments.meter.total);
   return NextResponse.json(apiError(code, message, suggestion, status, meta), {
     status,
   });

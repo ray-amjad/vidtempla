@@ -57,6 +57,16 @@ const MAX_BULK_ITEMS = 40;
 /** Credits per rewritten or deleted comment: 1 snapshot read + 50 write. */
 const CREDITS_PER_WRITE = 51;
 
+/** YouTube's per-page ceiling. Every page after the first is a credit the user asks for. */
+const PAGE_SIZE = 50;
+
+/** The exact input the search query runs with — the cache key has to match it. */
+const searchInputFor = (query: { channelId: string; searchTerms: string } | null) => ({
+  channelId: query?.channelId ?? '',
+  searchTerms: query?.searchTerms || undefined,
+  maxResults: PAGE_SIZE,
+});
+
 export default function CommentsTab() {
   const { toast } = useToast();
   const org = useOptionalOrganization();
@@ -80,12 +90,10 @@ export default function CommentsTab() {
 
   const activeChannelId = channelId || channels?.[0]?.channelId || '';
 
+  const utils = api.useUtils();
+
   const search = api.dashboard.comments.search.useInfiniteQuery(
-    {
-      channelId: query?.channelId ?? '',
-      searchTerms: query?.searchTerms || undefined,
-      maxResults: 50,
-    },
+    searchInputFor(query),
     {
       enabled: query !== null,
       getNextPageParam: (lastPage) => lastPage.nextPageToken ?? undefined,
@@ -111,12 +119,20 @@ export default function CommentsTab() {
     [search.data, removed]
   );
 
-  const runSearch = () => {
+  const runSearch = async () => {
     if (!activeChannelId) return;
+    const next = { channelId: activeChannelId, searchTerms: searchInput.trim() };
     setSelected(new Set());
     setRemoved(new Set());
     setBatch(null);
-    setQuery({ channelId: activeChannelId, searchTerms: searchInput.trim() });
+    setQuery(next);
+    // Re-running the same search produces a structurally identical query key,
+    // and `staleTime: Infinity` would answer it straight from the cache — but
+    // this is the one path where the cached text is known to be out of date,
+    // because a bulk rewrite just changed it. Drop the cached pages so the
+    // button always re-reads page one (1 credit). A different search has no
+    // cache under its key, so this is a no-op there.
+    await utils.dashboard.comments.search.reset(searchInputFor(next));
   };
 
   const toggle = (commentId: string) => {
@@ -226,7 +242,7 @@ export default function CommentsTab() {
                 placeholder="e.g. the old course URL"
                 onChange={(event) => setSearchInput(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter') runSearch();
+                  if (event.key === 'Enter') void runSearch();
                 }}
               />
             </div>

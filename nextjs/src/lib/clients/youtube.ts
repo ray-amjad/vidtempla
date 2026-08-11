@@ -91,6 +91,22 @@ export function isYouTubeQuotaError(error: unknown): boolean {
 }
 
 /**
+ * True only when YouTube answered and refused: an HTTP 4xx carries a decision,
+ * so the request definitively did not take effect.
+ *
+ * Everything else is ambiguous — a socket hang-up, a timeout or a 5xx may mean
+ * the request arrived and was applied before the connection died. A caller that
+ * records what a write actually did (`comment_edits`, issue #135 I8/I11) must
+ * only mark a write `failed` when this returns true; otherwise it leaves the
+ * row `pending` and lets reconciliation compare the live text.
+ */
+export function isDefinitiveYouTubeRejection(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  return typeof status === 'number' && status >= 400 && status < 500;
+}
+
+/**
  * Custom type for OAuth 2.0 token response
  * Matches Google's standard OAuth token format
  */
@@ -775,8 +791,10 @@ export async function searchChannelCommentThreads(
 /**
  * Fetches a single comment by ID.
  *
- * Returns null when YouTube responds with an empty item list — a comment that
- * does not exist (or was deleted) is reported that way rather than as a 404.
+ * Returns null when the comment is not there. YouTube reports that two ways for
+ * a by-id lookup — an empty item list, and a documented 404 for an unknown
+ * comment id — and both mean the same thing to every caller, so both come back
+ * as null. Quota, auth and every other failure still throws.
  *
  * `snippet.textOriginal` is present only when the authenticated channel wrote
  * the comment; for a third-party comment only `snippet.textDisplay` (HTML
@@ -788,15 +806,20 @@ export async function getCommentById(
   accessToken: string,
   commentId: string
 ): Promise<YouTubeComment | null> {
-  const response = await axios.get<{ items?: YouTubeComment[] }>(
-    `${YOUTUBE_API_BASE}/comments`,
-    {
-      params: { part: 'snippet', id: commentId },
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+  try {
+    const response = await axios.get<{ items?: YouTubeComment[] }>(
+      `${YOUTUBE_API_BASE}/comments`,
+      {
+        params: { part: 'snippet', id: commentId },
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
 
-  return response.data.items?.[0] ?? null;
+    return response.data.items?.[0] ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
 }
 
 /**

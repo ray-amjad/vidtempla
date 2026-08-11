@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, lt, or, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, or, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { commentEdits } from "@/db/schema";
 import { getChannelTokens } from "@/lib/api-auth";
@@ -12,6 +12,7 @@ import {
   replyToComment as ytReplyToComment,
   updateComment as ytUpdateComment,
   deleteComment as ytDeleteComment,
+  isDefinitiveYouTubeRejection,
   isYouTubeQuotaError,
   type YouTubeComment,
   type YouTubeCommentThread,
@@ -33,7 +34,9 @@ import type { ServiceResult, JsonValue, PaginationMeta, PaginationOpts } from ".
  * Every surface (MCP, REST, dashboard tRPC) calls these functions; none of them
  * consume credits or talk to the YouTube client themselves. Credits are charged
  * per item *as attempted*, never up front, so an aborted or quota-halted batch
- * only bills the work it actually did.
+ * only bills the work it actually did. The running total rides on the caller's
+ * `CommentContext.meter`, so a surface can log what a call really cost even when
+ * the call ends in an error.
  *
  * Credit costs: reads 1, writes 50, snapshotted writes 51 (1 read + 50 write).
  */
@@ -47,13 +50,41 @@ export const BULK_MAX_ITEMS = 40;
 /** I11: only `pending` rows older than this are reconciled by phase 0. */
 const STALE_PENDING_MS = 10 * 60 * 1000;
 
+const DEFAULT_EDITS_LIMIT = 50;
+const MAX_EDITS_LIMIT = 100;
+
 const UC_CHANNEL_ID = /^UC[\w-]{22}$/;
+
+/**
+ * Tally of the credits one service call actually consumed. The service charges
+ * it next to every `consumeCredits`, so the number is what was really billed —
+ * including on error paths, where a call can bill for reads and then fail.
+ *
+ * Each surface creates one per request and reads `meter.total` when it logs.
+ */
+export interface CreditMeter {
+  charge(credits: number): void;
+  readonly total: number;
+}
+
+export function createCreditMeter(): CreditMeter {
+  let total = 0;
+  return {
+    charge(credits: number) {
+      total += credits;
+    },
+    get total() {
+      return total;
+    },
+  };
+}
 
 /** Who is acting, and through which surface — recorded on every snapshot row. */
 export interface CommentContext {
   userId: string;
   organizationId: string;
   source: "mcp" | "rest" | "dashboard";
+  meter: CreditMeter;
 }
 
 export interface BulkUpdateItem {
@@ -68,38 +99,28 @@ export interface BulkItemResult {
   error?: { code: string; message: string };
 }
 
-export interface ReconcileCounts {
+/**
+ * Phase-0 tally. A type alias rather than an interface so it carries an implicit
+ * index signature and drops straight into an error's `JsonValue` meta bag.
+ */
+export type ReconcileCounts = {
   /** Stale `pending` rows examined by phase 0. */
   scanned: number;
   applied: number;
   failed: number;
   unknown: number;
-}
+};
 
 export interface BulkUpdateResult {
   results: BulkItemResult[];
   reconciled: ReconcileCounts;
+  /** Kept on this one result because the workbench renders it. */
   creditsConsumed: number;
   /** Present only when a YouTube quota halt stopped the batch. */
   resetsAt?: string;
 }
 
 type ServiceError = Extract<ServiceResult<unknown>, { error: unknown }>["error"];
-
-/**
- * Credits actually consumed by a service call — the number surfaces should log
- * as quota units. Errors carry it in `meta` because a call can bill for reads
- * and then fail.
- */
-export function creditsConsumedOf(
-  result: ServiceResult<{ creditsConsumed?: number }>
-): number {
-  if ("error" in result) {
-    const consumed = result.error.meta?.creditsConsumed;
-    return typeof consumed === "number" ? consumed : 0;
-  }
-  return result.data.creditsConsumed ?? 0;
-}
 
 function fail(
   code: string,
@@ -133,20 +154,19 @@ function tokenError(result: {
   );
 }
 
-function insufficientCredits(creditsConsumed: number): { error: ServiceError } {
+function insufficientCredits(): { error: ServiceError } {
   return fail(
     "QUOTA_EXCEEDED",
     "Insufficient credits",
     "Upgrade your plan or wait for the next billing cycle",
-    429,
-    { creditsConsumed }
+    429
   );
 }
 
-/** Maps a thrown YouTube error, tagging on the credits already billed. */
-function youtubeError(err: unknown, creditsConsumed: number): { error: ServiceError } {
+/** Maps a thrown YouTube error into the service envelope. */
+function youtubeError(err: unknown): { error: ServiceError } {
   const mapped = mapYouTubeServiceError(err);
-  const meta: Record<string, JsonValue> = { creditsConsumed };
+  const meta: Record<string, JsonValue> = {};
   if (mapped.meta?.upstreamStatus !== undefined) meta.upstreamStatus = mapped.meta.upstreamStatus;
   if (mapped.meta?.reasons) meta.reasons = mapped.meta.reasons;
   return {
@@ -155,7 +175,7 @@ function youtubeError(err: unknown, creditsConsumed: number): { error: ServiceEr
       message: mapped.message,
       suggestion: mapped.suggestion,
       status: mapped.status,
-      meta,
+      ...(Object.keys(meta).length > 0 ? { meta } : {}),
     },
   };
 }
@@ -175,6 +195,37 @@ async function resolveChannelToken(
   return { accessToken: tokens.accessToken };
 }
 
+/**
+ * The shape every plain YouTube call in this file shares: resolve the acting
+ * channel's token, bill the credits, run the call, translate a throw.
+ *
+ * `noteQuotaHalt` runs on *every* failure, reads included — a read that hits the
+ * daily quota trips the breaker exactly as a write does (I7).
+ *
+ * Snapshotted writes do not use this: they interleave a read, an insert and a
+ * write, and `snapshottedWrite` below owns that sequence.
+ */
+async function meteredCall<T>(
+  channelId: string,
+  ctx: CommentContext,
+  cost: number,
+  call: (accessToken: string) => Promise<T>
+): Promise<ServiceResult<T>> {
+  const token = await resolveChannelToken(channelId, ctx);
+  if ("error" in token) return token;
+
+  const credits = await consumeCredits(ctx.organizationId, cost);
+  if (!credits.success) return insufficientCredits();
+  ctx.meter.charge(cost);
+
+  try {
+    return { data: await call(token.accessToken) };
+  } catch (err) {
+    await noteQuotaHalt(err);
+    return youtubeError(err);
+  }
+}
+
 // ── list_comment_threads ─────────────────────────────────────
 
 /**
@@ -185,19 +236,10 @@ export async function listCommentThreads(
   videoId: string,
   ctx: CommentContext,
   opts: { maxResults?: number; order?: string; pageToken?: string } = {}
-): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string; creditsConsumed: number }>> {
-  const token = await resolveChannelToken(channelId, ctx);
-  if ("error" in token) return token;
-
-  const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-  if (!credits.success) return insufficientCredits(0);
-
-  try {
-    const result = await ytListCommentThreads(token.accessToken, videoId, opts);
-    return { data: { ...result, creditsConsumed: READ_CREDITS } };
-  } catch (err) {
-    return youtubeError(err, READ_CREDITS);
-  }
+): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string }>> {
+  return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
+    ytListCommentThreads(accessToken, videoId, opts)
+  );
 }
 
 // ── search_channel_comments ──────────────────────────────────
@@ -211,19 +253,10 @@ export async function searchChannelComments(
   channelId: string,
   ctx: CommentContext,
   opts: { searchTerms?: string; maxResults?: number; order?: string; pageToken?: string } = {}
-): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string; creditsConsumed: number }>> {
-  const token = await resolveChannelToken(channelId, ctx);
-  if ("error" in token) return token;
-
-  const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-  if (!credits.success) return insufficientCredits(0);
-
-  try {
-    const result = await ytSearchChannelCommentThreads(token.accessToken, channelId, opts);
-    return { data: { ...result, creditsConsumed: READ_CREDITS } };
-  } catch (err) {
-    return youtubeError(err, READ_CREDITS);
-  }
+): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string }>> {
+  return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
+    ytSearchChannelCommentThreads(accessToken, channelId, opts)
+  );
 }
 
 // ── get_comment_replies ──────────────────────────────────────
@@ -237,19 +270,10 @@ export async function getCommentReplies(
   parentId: string,
   ctx: CommentContext,
   opts: { maxResults?: number; pageToken?: string } = {}
-): Promise<ServiceResult<{ items: YouTubeComment[]; nextPageToken?: string; creditsConsumed: number }>> {
-  const token = await resolveChannelToken(channelId, ctx);
-  if ("error" in token) return token;
-
-  const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-  if (!credits.success) return insufficientCredits(0);
-
-  try {
-    const result = await ytListCommentReplies(token.accessToken, parentId, opts);
-    return { data: { ...result, creditsConsumed: READ_CREDITS } };
-  } catch (err) {
-    return youtubeError(err, READ_CREDITS);
-  }
+): Promise<ServiceResult<{ items: YouTubeComment[]; nextPageToken?: string }>> {
+  return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
+    ytListCommentReplies(accessToken, parentId, opts)
+  );
 }
 
 // ── list_comment_edits ───────────────────────────────────────
@@ -262,9 +286,16 @@ export async function getCommentReplies(
 export async function listCommentEdits(
   ctx: CommentContext,
   opts: PaginationOpts & { channelId?: string; commentId?: string } = {}
-): Promise<ServiceResult<{ data: unknown[]; meta: PaginationMeta; creditsConsumed: number }>> {
+): Promise<ServiceResult<{ data: unknown[]; meta: PaginationMeta }>> {
   try {
-    const limit = Math.min(opts.limit ?? 50, 100);
+    // Clamp both ends and coerce to an integer: `limit: 0` would otherwise
+    // return an unpageable dead end (`hasMore: true` with no cursor), and a
+    // negative or fractional limit would fail in the driver.
+    const requested = Number.isFinite(opts.limit)
+      ? Math.trunc(opts.limit as number)
+      : DEFAULT_EDITS_LIMIT;
+    const limit = Math.min(Math.max(requested, 1), MAX_EDITS_LIMIT);
+
     const scopeFilters: SQL[] = [eq(commentEdits.organizationId, ctx.organizationId)];
     if (opts.channelId) scopeFilters.push(eq(commentEdits.channelId, opts.channelId));
     if (opts.commentId) scopeFilters.push(eq(commentEdits.commentId, opts.commentId));
@@ -276,12 +307,23 @@ export async function listCommentEdits(
       if (!cursor || cursor.scope !== "comment_edits" || !isValidCursorId(cursor.id)) {
         return invalidCursor();
       }
-      const parsedDate = cursor.key === null ? null : new Date(cursor.key);
-      if (!parsedDate || Number.isNaN(parsedDate.getTime())) return invalidCursor();
+      const cursorDate = cursor.key === null ? null : new Date(cursor.key);
+      if (!cursorDate || Number.isNaN(cursorDate.getTime())) return invalidCursor();
+      // The cursor key is a millisecond-precision ISO string (node-postgres
+      // truncates the µs-precision timestamptz when it reads it), so an exact
+      // `created_at = cursorDate` tiebreaker would never match a row whose real
+      // value is e.g. T.123456 — dropping same-millisecond rows at the page
+      // boundary. Use a half-open millisecond window [cursorDate, cursorDate+1ms)
+      // for the id tiebreaker instead, which stays index-friendly.
+      const cursorDateNextMs = new Date(cursorDate.getTime() + 1);
       filters.push(
         or(
-          lt(commentEdits.createdAt, parsedDate),
-          and(eq(commentEdits.createdAt, parsedDate), lt(commentEdits.id, cursor.id))
+          lt(commentEdits.createdAt, cursorDate),
+          and(
+            gte(commentEdits.createdAt, cursorDate),
+            lt(commentEdits.createdAt, cursorDateNextMs),
+            lt(commentEdits.id, cursor.id)
+          )
         )!
       );
     }
@@ -314,7 +356,6 @@ export async function listCommentEdits(
       data: {
         data: items,
         meta: { cursor: nextCursor, hasMore, total: totalResult?.total ?? 0 },
-        creditsConsumed: 0,
       },
     };
   } catch {
@@ -342,20 +383,10 @@ export async function replyToComment(
   parentId: string,
   text: string,
   ctx: CommentContext
-): Promise<ServiceResult<{ comment: YouTubeComment; creditsConsumed: number }>> {
-  const token = await resolveChannelToken(channelId, ctx);
-  if ("error" in token) return token;
-
-  const credits = await consumeCredits(ctx.organizationId, WRITE_CREDITS);
-  if (!credits.success) return insufficientCredits(0);
-
-  try {
-    const comment = await ytReplyToComment(token.accessToken, parentId, text);
-    return { data: { comment, creditsConsumed: WRITE_CREDITS } };
-  } catch (err) {
-    await noteQuotaHalt(err);
-    return youtubeError(err, WRITE_CREDITS);
-  }
+): Promise<ServiceResult<{ comment: YouTubeComment }>> {
+  return meteredCall(channelId, ctx, WRITE_CREDITS, async (accessToken) => ({
+    comment: await ytReplyToComment(accessToken, parentId, text),
+  }));
 }
 
 // ── post_comment ─────────────────────────────────────────────
@@ -369,23 +400,21 @@ export async function postComment(
   videoId: string,
   text: string,
   ctx: CommentContext
-): Promise<ServiceResult<{ thread: YouTubeCommentThread; creditsConsumed: number }>> {
-  const token = await resolveChannelToken(channelId, ctx);
-  if ("error" in token) return token;
-
-  const credits = await consumeCredits(ctx.organizationId, WRITE_CREDITS);
-  if (!credits.success) return insufficientCredits(0);
-
-  try {
-    const thread = await ytPostCommentThread(token.accessToken, videoId, text);
-    return { data: { thread, creditsConsumed: WRITE_CREDITS } };
-  } catch (err) {
-    await noteQuotaHalt(err);
-    return youtubeError(err, WRITE_CREDITS);
-  }
+): Promise<ServiceResult<{ thread: YouTubeCommentThread }>> {
+  return meteredCall(channelId, ctx, WRITE_CREDITS, async (accessToken) => ({
+    thread: await ytPostCommentThread(accessToken, videoId, text),
+  }));
 }
 
 // ── update_comment ───────────────────────────────────────────
+
+/**
+ * The 403 an unauthored comment earns from YouTube. A single-item update does
+ * not pre-check authorship the way a batch does, so this is the only place the
+ * caller learns why the edit was refused.
+ */
+const AUTHORSHIP_403_SUGGESTION =
+  "You can only edit comments authored by the connected channel. Confirm the channelId matches the channel that wrote the comment.";
 
 /**
  * Edits a comment in place (I3 — never delete-and-repost, which silently
@@ -401,8 +430,8 @@ export async function updateComment(
   text: string,
   ctx: CommentContext,
   opts: { videoId?: string } = {}
-): Promise<ServiceResult<{ comment: YouTubeComment; editId: string; creditsConsumed: number }>> {
-  return snapshottedWrite(channelId, commentId, ctx, {
+): Promise<ServiceResult<{ comment: YouTubeComment; editId: string }>> {
+  const result = await snapshottedWrite(channelId, commentId, ctx, {
     verb: "update",
     afterText: text,
     videoId: opts.videoId,
@@ -411,6 +440,11 @@ export async function updateComment(
       return { comment };
     },
   });
+
+  if ("error" in result && result.error.code === "FORBIDDEN") {
+    return { error: { ...result.error, suggestion: AUTHORSHIP_403_SUGGESTION } };
+  }
+  return result;
 }
 
 // ── delete_comment ───────────────────────────────────────────
@@ -426,8 +460,8 @@ export async function deleteComment(
   commentId: string,
   ctx: CommentContext,
   opts: { videoId?: string } = {}
-): Promise<ServiceResult<{ deleted: true; editId: string; creditsConsumed: number }>> {
-  const result = await snapshottedWrite(channelId, commentId, ctx, {
+): Promise<ServiceResult<{ deleted: true; editId: string }>> {
+  return snapshottedWrite(channelId, commentId, ctx, {
     verb: "delete",
     afterText: null,
     videoId: opts.videoId,
@@ -436,13 +470,12 @@ export async function deleteComment(
       return { deleted: true as const };
     },
   });
-  return result;
 }
 
 /**
  * Read-snapshot-write for the two destructive single-item verbs. The row is
- * inserted `pending` before the YouTube call and transitions to `applied` or
- * `failed` after it — the only column that ever changes (I8).
+ * inserted `pending` before the YouTube call and transitions afterwards — the
+ * only column that ever changes (I8).
  */
 async function snapshottedWrite<T>(
   channelId: string,
@@ -454,22 +487,22 @@ async function snapshottedWrite<T>(
     videoId?: string;
     write: (accessToken: string) => Promise<T>;
   }
-): Promise<ServiceResult<T & { editId: string; creditsConsumed: number }>> {
+): Promise<ServiceResult<T & { editId: string }>> {
   const token = await resolveChannelToken(channelId, ctx);
   if ("error" in token) return token;
 
   const readCredits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-  if (!readCredits.success) return insufficientCredits(0);
-  let consumed = READ_CREDITS;
+  if (!readCredits.success) return insufficientCredits();
+  ctx.meter.charge(READ_CREDITS);
 
   let comment: YouTubeComment | null;
   try {
     comment = await ytGetCommentById(token.accessToken, commentId);
   } catch (err) {
     await noteQuotaHalt(err);
-    return youtubeError(err, consumed);
+    return youtubeError(err);
   }
-  if (!comment) return snapshotFailed(commentId, consumed);
+  if (!comment) return snapshotFailed(commentId);
 
   const snapshot = snapshotOf(comment);
   let editId: string;
@@ -497,25 +530,26 @@ async function snapshottedWrite<T>(
       "Could not record the comment's prior text",
       "Nothing was written to YouTube. Try again — every destructive comment write is snapshotted first.",
       500,
-      { commentId, creditsConsumed: consumed }
+      { commentId }
     );
   }
 
   const writeCredits = await consumeCredits(ctx.organizationId, WRITE_CREDITS);
   if (!writeCredits.success) {
+    // A known-unattempted write: the row can be finalized now.
     await setEditStatus(editId, "failed");
-    return insufficientCredits(consumed);
+    return insufficientCredits();
   }
-  consumed += WRITE_CREDITS;
+  ctx.meter.charge(WRITE_CREDITS);
 
   try {
     const data = await spec.write(token.accessToken);
     await setEditStatus(editId, "applied");
-    return { data: { ...data, editId, creditsConsumed: consumed } };
+    return { data: { ...data, editId } };
   } catch (err) {
-    await setEditStatus(editId, "failed");
+    await settleFailedWrite(editId, err);
     await noteQuotaHalt(err);
-    return youtubeError(err, consumed);
+    return youtubeError(err);
   }
 }
 
@@ -570,7 +604,6 @@ export async function bulkUpdateComments(
   if ("error" in token) return token;
   const { accessToken } = token;
 
-  let creditsConsumed = 0;
   const reconciled: ReconcileCounts = { scanned: 0, applied: 0, failed: 0, unknown: 0 };
 
   // ── Phase 0: reconcile stale pending rows (I11) ────────────
@@ -594,24 +627,25 @@ export async function bulkUpdateComments(
       "INTERNAL_ERROR",
       "Failed to read pending comment edits",
       "Try again later",
-      500,
-      { creditsConsumed }
+      500
     );
   }
 
   for (const row of staleRows) {
     const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-    if (!credits.success) return insufficientCredits(creditsConsumed);
-    creditsConsumed += READ_CREDITS;
+    if (!credits.success) return insufficientCredits();
+    ctx.meter.charge(READ_CREDITS);
     reconciled.scanned += 1;
 
     let live: YouTubeComment | null;
     try {
+      // A comment that is gone comes back as null, whether YouTube reports it
+      // as an empty item list or as a 404 — the client normalizes both.
       live = await ytGetCommentById(accessToken, row.commentId);
     } catch (err) {
       if (isYouTubeQuotaError(err)) {
         await markYouTubeQuotaExhausted();
-        return quotaHalted(creditsConsumed, reconciled);
+        return quotaHalted(reconciled);
       }
       // A non-quota read failure leaves the row pending for a later batch.
       continue;
@@ -624,11 +658,24 @@ export async function bulkUpdateComments(
   }
 
   // ── Phase 1: snapshot and validate every item ──────────────
+  //
+  // Nothing in this phase reaches YouTube, so every snapshot already inserted
+  // records a write that never happened. Each abort below finalizes those rows
+  // `failed` before it returns: a row left `pending` would be swept by a later
+  // phase 0, which bills a read for it and — if a retry has since written the
+  // same `afterText` — would flip it to `applied`, inventing a write this call
+  // never made. `comment_edits` is the only surviving copy of the prior text,
+  // so it must never claim a write that did not happen.
   const snapshots: Array<{ item: BulkUpdateItem; editId: string }> = [];
+  const abort = async (result: { error: ServiceError }): Promise<{ error: ServiceError }> => {
+    await markEditsFailed(snapshots.map((snapshot) => snapshot.editId));
+    return result;
+  };
+
   for (const item of items) {
     const credits = await consumeCredits(ctx.organizationId, READ_CREDITS);
-    if (!credits.success) return insufficientCredits(creditsConsumed);
-    creditsConsumed += READ_CREDITS;
+    if (!credits.success) return abort(insufficientCredits());
+    ctx.meter.charge(READ_CREDITS);
 
     let comment: YouTubeComment | null;
     try {
@@ -636,20 +683,22 @@ export async function bulkUpdateComments(
     } catch (err) {
       if (isYouTubeQuotaError(err)) {
         await markYouTubeQuotaExhausted();
-        return quotaHalted(creditsConsumed, reconciled);
+        return abort(quotaHalted(reconciled));
       }
-      return youtubeError(err, creditsConsumed);
+      return abort(youtubeError(err));
     }
 
-    if (!comment) return snapshotFailed(item.id, creditsConsumed, reconciled);
+    if (!comment) return abort(snapshotFailed(item.id, reconciled));
 
     if (comment.snippet.authorChannelId?.value !== channelId) {
-      return fail(
-        "AUTHORSHIP_MISMATCH",
-        `Comment ${item.id} was not written by channel ${channelId}`,
-        "A bulk update edits only comments the acting channel authored. Drop that ID and resend the batch — nothing was written to YouTube.",
-        403,
-        { commentId: item.id, creditsConsumed, reconciled: toJson(reconciled) }
+      return abort(
+        fail(
+          "AUTHORSHIP_MISMATCH",
+          `Comment ${item.id} was not written by channel ${channelId}`,
+          "A bulk update edits only comments the acting channel authored. Drop that ID and resend the batch — nothing was written to YouTube.",
+          403,
+          { commentId: item.id, reconciled }
+        )
       );
     }
 
@@ -673,23 +722,28 @@ export async function bulkUpdateComments(
         .returning({ id: commentEdits.id });
       snapshots.push({ item, editId: row!.id });
     } catch {
-      return fail(
-        "SNAPSHOT_FAILED",
-        `Could not record the prior text of comment ${item.id}`,
-        "Nothing was written to YouTube. Try again — every destructive comment write is snapshotted first.",
-        500,
-        { commentId: item.id, creditsConsumed, reconciled: toJson(reconciled) }
+      return abort(
+        fail(
+          "SNAPSHOT_FAILED",
+          `Could not record the prior text of comment ${item.id}`,
+          "Nothing was written to YouTube. Try again — every destructive comment write is snapshotted first.",
+          500,
+          { commentId: item.id, reconciled }
+        )
       );
     }
   }
 
   // ── Phase 2: write ─────────────────────────────────────────
   const results: BulkItemResult[] = [];
+  /** Rows for items the halt stopped us from ever sending. */
+  const unattempted: string[] = [];
   let resetsAt: string | undefined;
   let halted = false;
 
   for (const { item, editId } of snapshots) {
     if (halted) {
+      unattempted.push(editId);
       results.push({ id: item.id, status: "skipped" });
       continue;
     }
@@ -706,14 +760,14 @@ export async function bulkUpdateComments(
       halted = true;
       continue;
     }
-    creditsConsumed += WRITE_CREDITS;
+    ctx.meter.charge(WRITE_CREDITS);
 
     try {
       await ytUpdateComment(accessToken, item.id, item.text);
       await setEditStatus(editId, "applied");
       results.push({ id: item.id, status: "ok" });
     } catch (err) {
-      await setEditStatus(editId, "failed");
+      await settleFailedWrite(editId, err);
       if (isYouTubeQuotaError(err)) {
         await markYouTubeQuotaExhausted();
         resetsAt = nextQuotaResetAt().toISOString();
@@ -733,8 +787,16 @@ export async function bulkUpdateComments(
       });
     }
   }
+  await markEditsFailed(unattempted);
 
-  return { data: { results, reconciled, creditsConsumed, ...(resetsAt ? { resetsAt } : {}) } };
+  return {
+    data: {
+      results,
+      reconciled,
+      creditsConsumed: ctx.meter.total,
+      ...(resetsAt ? { resetsAt } : {}),
+    },
+  };
 }
 
 // ── snapshot helpers ─────────────────────────────────────────
@@ -780,6 +842,21 @@ function reconcileStatus(
   return "unknown";
 }
 
+/**
+ * Settles a snapshot row after its YouTube write threw.
+ *
+ * Only a definitive rejection — YouTube answered with a 4xx — proves the
+ * comment is untouched. A timeout, a dropped connection or a 5xx may have
+ * arrived and been applied, so the row stays `pending` and phase 0 of the next
+ * batch settles it against the live text (I11). Stamping `failed` on a write
+ * that actually landed is the worse lie of the two: it is terminal, because
+ * only `pending` rows reconcile, and it feeds the restore path `beforeText` to
+ * push back over a comment YouTube really did change.
+ */
+async function settleFailedWrite(editId: string, err: unknown): Promise<void> {
+  if (isDefinitiveYouTubeRejection(err)) await setEditStatus(editId, "failed");
+}
+
 async function setEditStatus(
   editId: string,
   status: "applied" | "failed" | "unknown"
@@ -793,9 +870,24 @@ async function setEditStatus(
   }
 }
 
+/**
+ * Finalizes rows for writes that provably never reached YouTube. Status-only,
+ * like every other transition (I8).
+ */
+async function markEditsFailed(editIds: string[]): Promise<void> {
+  if (editIds.length === 0) return;
+  try {
+    await db
+      .update(commentEdits)
+      .set({ status: "failed" })
+      .where(inArray(commentEdits.id, editIds));
+  } catch (err) {
+    console.error("Failed to finalize unattempted comment_edits rows:", err);
+  }
+}
+
 function snapshotFailed(
   commentId: string,
-  creditsConsumed: number,
   reconciled?: ReconcileCounts
 ): { error: ServiceError } {
   return fail(
@@ -805,34 +897,25 @@ function snapshotFailed(
     404,
     {
       commentId,
-      creditsConsumed,
-      ...(reconciled ? { reconciled: toJson(reconciled) } : {}),
+      ...(reconciled ? { reconciled } : {}),
     }
   );
 }
 
-function quotaHalted(
-  creditsConsumed: number,
-  reconciled: ReconcileCounts
-): { error: ServiceError } {
+function quotaHalted(reconciled: ReconcileCounts): { error: ServiceError } {
   return fail(
     "QUOTA_EXCEEDED",
     "YouTube Data API daily quota exceeded",
     "Nothing was written to YouTube. Retry after the quota resets.",
     429,
     {
-      creditsConsumed,
-      reconciled: toJson(reconciled),
+      reconciled,
       resetsAt: nextQuotaResetAt().toISOString(),
     }
   );
 }
 
-/** Trips the breaker when a single-item write hits the daily quota (I7). */
+/** Trips the breaker when a call hits the daily quota (I7). */
 async function noteQuotaHalt(err: unknown): Promise<void> {
   if (isYouTubeQuotaError(err)) await markYouTubeQuotaExhausted();
-}
-
-function toJson(counts: ReconcileCounts): JsonValue {
-  return { ...counts };
 }

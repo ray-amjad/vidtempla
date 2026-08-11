@@ -87,11 +87,29 @@ Every proxy endpoint documents its YouTube API quota cost. Costs are tracked in 
 | YouTube Data API reads (videos.list, channels.list) | 1 |
 | YouTube search.list (channel-scoped or public) | 100 |
 | YouTube write operations (playlists, comments, thumbnails) | 50 |
+| Snapshotted comment writes (update, delete) | 51 |
 | Captions list | 50 |
 | Captions transcript (with captionId) | 200 |
 | Captions transcript (auto-select) | 250 |
 | VidTempla-native endpoints (templates, containers, usage) | 0 |
 | Analytics API queries | Separate quota pool |
+
+## Comment Endpoints
+
+The comment routes are the one group that does not call YouTube itself. They delegate to `src/lib/services/comments.ts`, which owns credit consumption and the `comment_edits` snapshot table. A comment route that called `consumeCredits` or the YouTube client directly would skip both, so route files only shape the request, log what the service metered, and render the envelope (`src/lib/api-comments.ts`).
+
+| Route | Method | Quota cost |
+|---|---|---|
+| `/youtube/comments` | GET | 1 per page — channel-wide search, `channelId` required |
+| `/youtube/comments/[id]` | GET | 1 per page — threads on one video (`id` is the videoId) |
+| `/youtube/comments/[id]` | DELETE | 51 — 1 snapshot read + 50 delete |
+| `/youtube/comments/reply` | POST | 50 — new content, no snapshot |
+| `/youtube/comments/bulk-update` | POST | 51 per item, plus 1 per stale row reconciled |
+| `/youtube/comments/edits` | GET | 0 — reads the snapshot table only |
+
+- Every destructive comment write records the prior text in `comment_edits` before it touches YouTube. YouTube keeps no comment version history, so that row is the only surviving copy; `GET /youtube/comments/edits` is how an agent reads it back. Only rows with `textSource: "original"` hold restorable text.
+- `bulk-update` carries at most 40 items and declares `export const maxDuration = 60`. Its request schema is shared with the MCP tool and the dashboard mutation in `src/lib/comment-schemas.ts` — the three surfaces differ only in transport, so validation must not diverge between them.
+- The three mutating routes require a `read-write` key via `requireWriteAccess`; the three read routes accept either tier.
 
 ## Request Counting
 

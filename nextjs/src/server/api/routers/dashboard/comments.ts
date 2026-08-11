@@ -26,8 +26,8 @@ import { db } from "@/db";
 import { youtubeChannels, youtubeVideos } from "@/db/schema";
 import { orgProcedure, orgAdminProcedure, router } from "@/server/trpc/init";
 import {
-  BULK_MAX_ITEMS,
   bulkUpdateComments,
+  createCreditMeter,
   deleteComment,
   getCommentReplies,
   listCommentThreads,
@@ -35,6 +35,7 @@ import {
   searchChannelComments,
   type CommentContext,
 } from "@/lib/services/comments";
+import { bulkUpdateInputSchema } from "@/lib/comment-schemas";
 import type { ServiceResult } from "@/lib/services/types";
 
 type ServiceError = Extract<ServiceResult<unknown>, { error: unknown }>["error"];
@@ -65,7 +66,12 @@ function throwCommentServiceError(error: ServiceError): never {
 }
 
 function commentContext(ctx: { user: { id: string }; organizationId: string }): CommentContext {
-  return { userId: ctx.user.id, organizationId: ctx.organizationId, source: "dashboard" };
+  return {
+    userId: ctx.user.id,
+    organizationId: ctx.organizationId,
+    source: "dashboard",
+    meter: createCreditMeter(),
+  };
 }
 
 /**
@@ -187,21 +193,7 @@ export const commentsRouter = router({
    * 51 credits per item, plus 1 per reconciled stale row.
    */
   bulkUpdate: orgAdminProcedure
-    .input(
-      z.object({
-        channelId: channelIdSchema,
-        items: z
-          .array(
-            z.object({
-              id: z.string().min(1),
-              videoId: z.string().optional(),
-              text: z.string().min(1).max(10000),
-            })
-          )
-          .min(1)
-          .max(BULK_MAX_ITEMS),
-      })
-    )
+    .input(bulkUpdateInputSchema)
     .mutation(async ({ ctx, input }) => {
       const result = await bulkUpdateComments(input.channelId, input.items, commentContext(ctx));
       if ("error" in result) throwCommentServiceError(result.error);

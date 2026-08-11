@@ -4,7 +4,7 @@ import { toMcp, mcpError, getSessionUserId, getSessionOrgId, logMcpRequest, READ
 import {
   BULK_MAX_ITEMS,
   bulkUpdateComments,
-  creditsConsumedOf,
+  createCreditMeter,
   deleteComment,
   getCommentReplies,
   listCommentEdits,
@@ -15,28 +15,35 @@ import {
   updateComment,
   type CommentContext,
 } from "@/lib/services/comments";
+import { bulkUpdateInputShape } from "@/lib/comment-schemas";
 import type { ServiceResult } from "@/lib/services/types";
 
 /**
  * Comment tools are a thin wrapper: credits, snapshots and the bulk batch all
  * live in `services/comments.ts` (I9). Tools only shape arguments, log the
- * credits the service reports, and convert the result.
+ * credits the service metered, and convert the result.
  */
 
 function ctx(): CommentContext {
-  return { userId: getSessionUserId(), organizationId: getSessionOrgId(), source: "mcp" };
+  return {
+    userId: getSessionUserId(),
+    organizationId: getSessionOrgId(),
+    source: "mcp",
+    meter: createCreditMeter(),
+  };
 }
 
 /** Logs the credits the service actually consumed, then converts the result. */
-function finish<T extends { creditsConsumed?: number }>(
+function finish<T>(
   userId: string,
   toolName: string,
+  context: CommentContext,
   result: ServiceResult<T>
 ) {
   logMcpRequest(
     userId,
     toolName,
-    creditsConsumedOf(result),
+    context.meter.total,
     "error" in result ? result.error.status : 200
   );
   return toMcp(result);
@@ -65,10 +72,16 @@ export function registerCommentTools(server: McpServer) {
           "Use videoId to read one video's threads, or searchTerms to search the whole channel"
         );
       }
+      const context = ctx();
       const result = videoId
-        ? await listCommentThreads(channelId, videoId, ctx(), { maxResults, order, pageToken })
-        : await searchChannelComments(channelId, ctx(), { searchTerms, maxResults, order, pageToken });
-      return finish(userId, "list_comment_threads", result);
+        ? await listCommentThreads(channelId, videoId, context, { maxResults, order, pageToken })
+        : await searchChannelComments(channelId, context, {
+            searchTerms,
+            maxResults,
+            order,
+            pageToken,
+          });
+      return finish(userId, "list_comment_threads", context, result);
     }
   );
 
@@ -84,8 +97,12 @@ export function registerCommentTools(server: McpServer) {
     READ,
     async ({ channelId, parentId, maxResults, pageToken }) => {
       const userId = getSessionUserId();
-      const result = await getCommentReplies(channelId, parentId, ctx(), { maxResults, pageToken });
-      return finish(userId, "get_comment_replies", result);
+      const context = ctx();
+      const result = await getCommentReplies(channelId, parentId, context, {
+        maxResults,
+        pageToken,
+      });
+      return finish(userId, "get_comment_replies", context, result);
     }
   );
 
@@ -101,8 +118,9 @@ export function registerCommentTools(server: McpServer) {
     READ,
     async ({ channelId, commentId, cursor, limit }) => {
       const userId = getSessionUserId();
-      const result = await listCommentEdits(ctx(), { channelId, commentId, cursor, limit });
-      return finish(userId, "list_comment_edits", result);
+      const context = ctx();
+      const result = await listCommentEdits(context, { channelId, commentId, cursor, limit });
+      return finish(userId, "list_comment_edits", context, result);
     }
   );
 
@@ -117,8 +135,9 @@ export function registerCommentTools(server: McpServer) {
     WRITE,
     async ({ channelId, parentId, text }) => {
       const userId = getSessionUserId();
-      const result = await replyToComment(channelId, parentId, text, ctx());
-      return finish(userId, "reply_to_comment", result);
+      const context = ctx();
+      const result = await replyToComment(channelId, parentId, text, context);
+      return finish(userId, "reply_to_comment", context, result);
     }
   );
 
@@ -133,8 +152,9 @@ export function registerCommentTools(server: McpServer) {
     WRITE,
     async ({ channelId, videoId, text }) => {
       const userId = getSessionUserId();
-      const result = await postComment(channelId, videoId, text, ctx());
-      return finish(userId, "post_comment", result);
+      const context = ctx();
+      const result = await postComment(channelId, videoId, text, context);
+      return finish(userId, "post_comment", context, result);
     }
   );
 
@@ -150,33 +170,22 @@ export function registerCommentTools(server: McpServer) {
     WRITE,
     async ({ channelId, commentId, text, videoId }) => {
       const userId = getSessionUserId();
-      const result = await updateComment(channelId, commentId, text, ctx(), { videoId });
-      return finish(userId, "update_comment", result);
+      const context = ctx();
+      const result = await updateComment(channelId, commentId, text, context, { videoId });
+      return finish(userId, "update_comment", context, result);
     }
   );
 
   server.tool(
     "update_comments",
     `Edit up to ${BULK_MAX_ITEMS} comments of one channel in a single call — the way to rewrite a course link everywhere it appears. Find the comments with list_comment_threads + searchTerms, pick the ones to change, then send them here with their new text. Every comment must have been authored by channelId; if one was not, the batch aborts and nothing is written. Each item's prior text is snapshotted first (see list_comment_edits). Costs 51 credits per item. For more than ${BULK_MAX_ITEMS} comments, loop over batches.`,
-    {
-      channelId: z.string().describe("YouTube channel ID that authored every comment in the batch (UC...)"),
-      items: z
-        .array(
-          z.object({
-            id: z.string().describe("Comment ID to edit"),
-            videoId: z.string().optional().describe("Video the comment sits on, recorded on the snapshot row"),
-            text: z.string().min(1).describe("Replacement comment text"),
-          })
-        )
-        .min(1)
-        .max(BULK_MAX_ITEMS)
-        .describe(`Comments to edit, at most ${BULK_MAX_ITEMS} per call`),
-    },
+    bulkUpdateInputShape,
     WRITE,
     async ({ channelId, items }) => {
       const userId = getSessionUserId();
-      const result = await bulkUpdateComments(channelId, items, ctx());
-      return finish(userId, "update_comments", result);
+      const context = ctx();
+      const result = await bulkUpdateComments(channelId, items, context);
+      return finish(userId, "update_comments", context, result);
     }
   );
 
@@ -191,8 +200,9 @@ export function registerCommentTools(server: McpServer) {
     DESTRUCTIVE,
     async ({ channelId, commentId, videoId }) => {
       const userId = getSessionUserId();
-      const result = await deleteComment(channelId, commentId, ctx(), { videoId });
-      return finish(userId, "delete_comment", result);
+      const context = ctx();
+      const result = await deleteComment(channelId, commentId, context, { videoId });
+      return finish(userId, "delete_comment", context, result);
     }
   );
 }

@@ -7,7 +7,7 @@ import {
   logRequest,
 } from "@/lib/api-auth";
 import { commentContext, serviceErrorResponse } from "@/lib/api-comments";
-import { creditsConsumedOf, deleteComment, listCommentThreads } from "@/lib/services/comments";
+import { deleteComment, listCommentThreads } from "@/lib/services/comments";
 
 /**
  * GET /api/v1/youtube/comments/[id]?channelId=...&maxResults=100&order=relevance|time&cursor=...
@@ -58,14 +58,15 @@ export async function GET(
     );
   }
 
-  const result = await listCommentThreads(channelId, videoId, commentContext(ctx), {
+  const comments = commentContext(ctx);
+  const result = await listCommentThreads(channelId, videoId, comments, {
     maxResults,
     order,
     pageToken,
   });
-  if ("error" in result) return serviceErrorResponse(ctx, endpoint, "GET", result);
+  if ("error" in result) return serviceErrorResponse(ctx, comments, endpoint, "GET", result);
 
-  const quotaUnits = creditsConsumedOf(result);
+  const quotaUnits = comments.meter.total;
   logRequest(ctx, endpoint, "GET", 200, quotaUnits);
   return NextResponse.json(
     apiSuccess(result.data.items, {
@@ -110,10 +111,11 @@ export async function DELETE(
     );
   }
 
-  const result = await deleteComment(channelId, commentId, commentContext(ctx), { videoId });
-  if ("error" in result) return serviceErrorResponse(ctx, endpoint, "DELETE", result);
+  const comments = commentContext(ctx);
+  const result = await deleteComment(channelId, commentId, comments, { videoId });
+  if ("error" in result) return serviceErrorResponse(ctx, comments, endpoint, "DELETE", result);
 
-  const quotaUnits = creditsConsumedOf(result);
+  const quotaUnits = comments.meter.total;
   logRequest(ctx, endpoint, "DELETE", 200, quotaUnits);
   return NextResponse.json(
     apiSuccess({ deleted: true, editId: result.data.editId }, { quotaUnits })

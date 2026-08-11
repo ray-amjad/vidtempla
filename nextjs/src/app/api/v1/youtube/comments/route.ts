@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { withApiKey, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
 import { commentContext, serviceErrorResponse } from "@/lib/api-comments";
-import { creditsConsumedOf, searchChannelComments } from "@/lib/services/comments";
+import { searchChannelComments } from "@/lib/services/comments";
 
 const ENDPOINT = "/youtube/comments";
 
@@ -43,15 +43,16 @@ export async function GET(request: NextRequest) {
   }
 
   const { channelId, searchTerms, maxResults, order, cursor } = parsed.data;
-  const result = await searchChannelComments(channelId, commentContext(ctx), {
+  const comments = commentContext(ctx);
+  const result = await searchChannelComments(channelId, comments, {
     searchTerms,
     maxResults,
     order,
     pageToken: cursor,
   });
-  if ("error" in result) return serviceErrorResponse(ctx, ENDPOINT, "GET", result);
+  if ("error" in result) return serviceErrorResponse(ctx, comments, ENDPOINT, "GET", result);
 
-  const quotaUnits = creditsConsumedOf(result);
+  const quotaUnits = comments.meter.total;
   logRequest(ctx, ENDPOINT, "GET", 200, quotaUnits);
   return NextResponse.json(
     apiSuccess(result.data.items, {

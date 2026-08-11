@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import {
   withApiKey,
   requireWriteAccess,
@@ -8,7 +7,8 @@ import {
   logRequest,
 } from "@/lib/api-auth";
 import { commentContext, serviceErrorResponse } from "@/lib/api-comments";
-import { BULK_MAX_ITEMS, bulkUpdateComments, creditsConsumedOf } from "@/lib/services/comments";
+import { BULK_MAX_ITEMS, bulkUpdateComments } from "@/lib/services/comments";
+import { bulkUpdateInputSchema } from "@/lib/comment-schemas";
 
 /**
  * A full batch is 40 reconcile reads + 40 snapshot reads + 40 writes — about
@@ -18,19 +18,8 @@ export const maxDuration = 60;
 
 const ENDPOINT = "/youtube/comments/bulk-update";
 
-const BodySchema = z.object({
-  channelId: z.string().min(1),
-  items: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        videoId: z.string().min(1).optional(),
-        text: z.string().min(1),
-      })
-    )
-    .min(1)
-    .max(BULK_MAX_ITEMS),
-});
+/** Shared with the MCP tool and the dashboard mutation — see comment-schemas.ts. */
+const BodySchema = bulkUpdateInputSchema;
 
 /**
  * POST /api/v1/youtube/comments/bulk-update
@@ -85,11 +74,12 @@ export async function POST(request: NextRequest) {
   }
 
   const { channelId, items } = parsed.data;
-  const result = await bulkUpdateComments(channelId, items, commentContext(ctx));
-  if ("error" in result) return serviceErrorResponse(ctx, ENDPOINT, "POST", result);
+  const comments = commentContext(ctx);
+  const result = await bulkUpdateComments(channelId, items, comments);
+  if ("error" in result) return serviceErrorResponse(ctx, comments, ENDPOINT, "POST", result);
 
   const { results, reconciled, resetsAt } = result.data;
-  const quotaUnits = creditsConsumedOf(result);
+  const quotaUnits = comments.meter.total;
   logRequest(ctx, ENDPOINT, "POST", 200, quotaUnits);
   return NextResponse.json(
     apiSuccess({ results, reconciled, ...(resetsAt ? { resetsAt } : {}) }, { quotaUnits })

@@ -45,8 +45,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const result = await listCommentEdits(commentContext(ctx), parsed.data);
-  if ("error" in result) return serviceErrorResponse(ctx, ENDPOINT, "GET", result);
+  const comments = commentContext(ctx);
+  const result = await listCommentEdits(comments, parsed.data);
+  if ("error" in result) return serviceErrorResponse(ctx, comments, ENDPOINT, "GET", result);
 
   logRequest(ctx, ENDPOINT, "GET", 200, 0);
   return NextResponse.json(
