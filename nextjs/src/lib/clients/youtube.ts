@@ -815,6 +815,16 @@ export async function listCommentThreads(
  * threads whose text matches — the primary use is finding every comment that
  * contains a given URL.
  *
+ * No `order` parameter, deliberately: YouTube rejects `order=relevance`
+ * alongside `allThreadsRelatedToChannelId` with `400 processingFailure`, even
+ * though the reference lists the two as compatible and documents `relevance`
+ * as a valid value. Measured against the live API on 2026-08-12 — every
+ * request carrying `order=relevance` failed and every request without it
+ * returned a full page, independent of `searchTerms` and of the requested
+ * parts. Omitting the parameter leaves YouTube's own default, `time`, which is
+ * also the more useful order for a sweep. `listCommentThreads` above is
+ * `videoId`-scoped and unaffected, so it keeps its `order` argument.
+ *
  * Quota cost: 1 unit per page (<= 100 items)
  */
 export async function searchChannelCommentThreads(
@@ -823,7 +833,6 @@ export async function searchChannelCommentThreads(
   opts: {
     searchTerms?: string;
     maxResults?: number;
-    order?: string;
     pageToken?: string;
   } = {}
 ): Promise<{ items: YouTubeCommentThread[]; nextPageToken?: string }> {
@@ -834,7 +843,6 @@ export async function searchChannelCommentThreads(
         part: 'snippet,replies',
         allThreadsRelatedToChannelId: channelId,
         maxResults: opts.maxResults ?? 20,
-        order: opts.order ?? 'relevance',
         textFormat: DISPLAY_TEXT_FORMAT,
         ...(opts.searchTerms && { searchTerms: opts.searchTerms }),
         ...(opts.pageToken && { pageToken: opts.pageToken }),

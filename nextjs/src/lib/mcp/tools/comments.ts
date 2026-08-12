@@ -58,7 +58,7 @@ export function registerCommentTools(server: McpServer) {
       videoId: z.string().optional().describe("YouTube video ID (e.g. 'dQw4w9WgXcQ') — omit to search channel-wide with searchTerms"),
       searchTerms: z.string().optional().describe("Search channel-wide for threads whose text matches, e.g. an old course URL. Ignored when videoId is set."),
       maxResults: z.number().optional().describe("Number of threads to return (1-100, default 20)"),
-      order: z.enum(["relevance", "time"]).optional().describe("Sort order: 'relevance' (default) or 'time' (newest first)"),
+      order: z.enum(["relevance", "time"]).optional().describe("Sort order for a videoId lookup: 'relevance' (default) or 'time' (newest first). Ignored for a channel-wide searchTerms search, which YouTube only returns newest-first."),
       pageToken: z.string().optional().describe("Pagination token from a previous response's nextPageToken"),
     },
     READ,
@@ -78,7 +78,6 @@ export function registerCommentTools(server: McpServer) {
         : await searchChannelComments(channelId, context, {
             searchTerms,
             maxResults,
-            order,
             pageToken,
           });
       return finish(userId, "list_comment_threads", context, result);
