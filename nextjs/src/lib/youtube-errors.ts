@@ -65,20 +65,48 @@ const QUOTA_REASONS = new Set([
  *  - upstream HTTP 403 -> `FORBIDDEN` / 403
  *  - everything else   -> `YOUTUBE_API_ERROR` / upstream status (or 500)
  */
-export function mapYouTubeError(err: unknown): MappedYouTubeError {
-  // Pull a typed view of the axios error payload, falling back gracefully
-  // for non-axios errors (e.g. network failures, programmer errors).
+/**
+ * What an upstream failure says about itself, before any mapping decision.
+ *
+ * Separate from `mapYouTubeError` because the mapper attaches `reasons` to the
+ * quota envelope only, while a caller that wants to *log* the cause needs them
+ * on every status — `reason` is the single field that names why YouTube
+ * refused, and a 403 is exactly the case where the mapper drops it.
+ */
+export interface YouTubeErrorDetail {
+  /** Upstream HTTP status, or undefined when the call never got a response. */
+  upstreamStatus?: number;
+  /** Every `error.errors[].reason` YouTube returned, in order. */
+  reasons: string[];
+  /** YouTube's own message, falling back to the thrown error's. */
+  message: string;
+}
+
+/** Reads an upstream failure's status, reasons and message. Pure. */
+export function youTubeErrorDetail(err: unknown): YouTubeErrorDetail {
   const axiosErr = axios.isAxiosError<YouTubeErrorPayload>(err) ? err : null;
   const payload = axiosErr?.response?.data;
-  const reasons =
-    payload?.error?.errors
-      ?.map((entry) => entry.reason)
-      .filter((reason): reason is string => Boolean(reason)) ?? [];
-  const status = axiosErr?.response?.status ?? 500;
-  const message =
-    payload?.error?.message ??
-    (err instanceof Error ? err.message : undefined) ??
-    "YouTube API error";
+  return {
+    upstreamStatus: axiosErr?.response?.status,
+    reasons:
+      payload?.error?.errors
+        ?.map((entry) => entry.reason)
+        .filter((reason): reason is string => Boolean(reason)) ?? [],
+    message:
+      payload?.error?.message ??
+      (err instanceof Error ? err.message : undefined) ??
+      "YouTube API error",
+  };
+}
+
+export function mapYouTubeError(err: unknown): MappedYouTubeError {
+  // Falls back gracefully for non-axios errors (e.g. network failures,
+  // programmer errors): no response means no reasons and a 500.
+  const axiosErr = axios.isAxiosError<YouTubeErrorPayload>(err) ? err : null;
+  const detail = youTubeErrorDetail(err);
+  const reasons = detail.reasons;
+  const status = detail.upstreamStatus ?? 500;
+  const message = detail.message;
   const meta =
     axiosErr?.response || reasons.length > 0
       ? {

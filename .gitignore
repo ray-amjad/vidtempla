@@ -3,3 +3,6 @@
 
 # Local-only docs containing personal/sensitive data — never commit (public repo)
 youtube-quota-audit-form.md
+
+# Infisical project link — carries the workspace id
+.infisical.json

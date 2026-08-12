@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { toMcp, mcpError, getSessionUserId, getSessionOrgId, logMcpRequest, READ, WRITE, DESTRUCTIVE } from "../helpers";
+import { toMcp, mcpError, getSessionUserId, getSessionOrgId, logMcpRequest, requireOrgAdmin, READ, WRITE, DESTRUCTIVE } from "../helpers";
 import {
   BULK_MAX_ITEMS,
   bulkUpdateComments,
@@ -184,13 +184,19 @@ export function registerCommentTools(server: McpServer) {
     }
   );
 
+  // TODO: annotated `WRITE` while it permanently overwrites the text of up to
+  // 40 comments. `DESTRUCTIVE` is the honest hint, but changing it moves the
+  // tool into a different permission group in every connected client, so it is
+  // a deliberate follow-up rather than part of the role gate below.
   server.tool(
     "update_comments",
-    `Edit up to ${BULK_MAX_ITEMS} comments of one channel in a single call — the way to rewrite a course link everywhere it appears. Find the comments with list_comment_threads + searchTerms, pick the ones to change, then send them here with their new text. Every comment must have been authored by channelId; if one was not, the batch aborts and nothing is written. Each item's prior text is snapshotted first (see list_comment_edits). Costs 51 credits per item. For more than ${BULK_MAX_ITEMS} comments, loop over batches.`,
+    `Edit up to ${BULK_MAX_ITEMS} comments of one channel in a single call — the way to rewrite a course link everywhere it appears. Requires the owner or admin role in the workspace; a member gets FORBIDDEN_ROLE and nothing is written. Find the comments with list_comment_threads + searchTerms, pick the ones to change, then send them here with their new text. Every comment must have been authored by channelId; if one was not, the batch aborts and nothing is written. Each item's prior text is snapshotted first (see list_comment_edits). Costs 51 credits per item. For more than ${BULK_MAX_ITEMS} comments, loop over batches.`,
     bulkUpdateInputShape,
     WRITE,
     async ({ channelId, items }) => {
       const userId = getSessionUserId();
+      const denied = requireOrgAdmin(userId, "update_comments");
+      if (denied) return denied;
       const context = ctx();
       const result = await bulkUpdateComments(channelId, items, context);
       return finish(userId, "update_comments", context, result);
@@ -199,7 +205,7 @@ export function registerCommentTools(server: McpServer) {
 
   server.tool(
     "delete_comment",
-    "Permanently delete a YouTube comment. This cannot be undone. The prior text is snapshotted first (see list_comment_edits), but for a comment your channel did not write the snapshot is an audit record, not restorable text. You can only delete comments on videos you own or comments you authored. Costs 51 credits.",
+    "Permanently delete a YouTube comment. This cannot be undone. Requires the owner or admin role in the workspace; a member gets FORBIDDEN_ROLE and nothing is deleted. The prior text is snapshotted first (see list_comment_edits), but for a comment your channel did not write the snapshot is an audit record, not restorable text. You can only delete comments on videos you own or comments you authored. Costs 51 credits.",
     {
       channelId: z.string().describe("YouTube channel ID that owns the video (UC...)"),
       commentId: z.string().describe("The comment ID to delete (from list_comment_threads results)"),
@@ -208,6 +214,8 @@ export function registerCommentTools(server: McpServer) {
     DESTRUCTIVE,
     async ({ channelId, commentId, videoId }) => {
       const userId = getSessionUserId();
+      const denied = requireOrgAdmin(userId, "delete_comment");
+      if (denied) return denied;
       const context = ctx();
       const result = await deleteComment(channelId, commentId, context, { videoId });
       return finish(userId, "delete_comment", context, result);

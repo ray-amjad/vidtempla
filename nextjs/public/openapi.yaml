@@ -384,6 +384,36 @@ components:
               suggestion: Create a new API key with read-write permission from Settings > API Keys
               status: 403
 
+    AdminRoleRequired:
+      description: |
+        Refused for one of two reasons: the API key is read-only, or the key's
+        owner is not an owner or admin of the organization. This operation is
+        destructive, and every surface — dashboard, MCP and REST — requires the
+        admin role for it. Nothing was changed, and no credits were spent.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            readOnlyKey:
+              summary: The API key cannot write
+              value:
+                data: null
+                error:
+                  code: INSUFFICIENT_PERMISSIONS
+                  message: This API key has read-only access
+                  suggestion: Create a new API key with read-write permission from Settings > API Keys
+                  status: 403
+            memberRole:
+              summary: The key's owner is not an admin
+              value:
+                data: null
+                error:
+                  code: FORBIDDEN_ROLE
+                  message: This operation requires the owner or admin role in this organization
+                  suggestion: "This API key belongs to a 'member'. Ask an organization owner or admin to run it, or to raise the key owner's role."
+                  status: 403
+
     QuotaExceeded:
       description: YouTube API quota or rate limit exceeded
       content:
@@ -1220,7 +1250,7 @@ paths:
       responses:
         "200": { description: Description reverted }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/InsufficientPermissions" }
+        "403": { $ref: "#/components/responses/AdminRoleRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   # ─── Templates ──────────────────────────────────────────────
@@ -1428,7 +1458,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/InsufficientPermissions"
+          $ref: "#/components/responses/AdminRoleRequired"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -1738,7 +1768,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/InsufficientPermissions"
+          $ref: "#/components/responses/AdminRoleRequired"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -2139,7 +2169,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/InsufficientPermissions"
+          $ref: "#/components/responses/AdminRoleRequired"
         "429":
           $ref: "#/components/responses/QuotaExceeded"
         "500":
@@ -2336,7 +2366,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/InsufficientPermissions"
+          $ref: "#/components/responses/AdminRoleRequired"
         "429":
           $ref: "#/components/responses/QuotaExceeded"
         "500":
@@ -2591,7 +2621,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/InsufficientPermissions"
+          $ref: "#/components/responses/AdminRoleRequired"
         "404":
           description: The comment or the channel was not found. Nothing was written to YouTube.
           content:
@@ -2810,9 +2840,11 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: |
-            The API key is read-only, or a comment was not authored by `channelId`
-            (`AUTHORSHIP_MISMATCH`). On an authorship mismatch the batch aborted and
-            nothing was written to YouTube — drop that ID and send the batch again.
+            One of three: the API key is read-only; the key's owner is not an owner
+            or admin of the organization (`FORBIDDEN_ROLE`), which this operation
+            requires on every surface; or a comment was not authored by `channelId`
+            (`AUTHORSHIP_MISMATCH`). In every case nothing was written to YouTube —
+            on an authorship mismatch, drop that ID and send the batch again.
           content:
             application/json:
               schema:

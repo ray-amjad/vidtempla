@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { toMcp, getSessionUserId, getSessionOrgId, logMcpRequest, READ, WRITE, DESTRUCTIVE } from "../helpers";
+import { toMcp, getSessionUserId, getSessionOrgId, logMcpRequest, requireOrgAdmin, READ, WRITE, DESTRUCTIVE } from "../helpers";
 import {
   listContainers,
   getContainer,
@@ -81,11 +81,13 @@ export function registerContainerTools(server: McpServer) {
 
   server.tool(
     "delete_container",
-    "Delete a container. Videos will be unassigned.",
+    "Delete a container. Videos will be unassigned. Requires the owner or admin role in the workspace; a member gets FORBIDDEN_ROLE and nothing is deleted.",
     { id: z.string().describe("Container UUID") },
     DESTRUCTIVE,
     async ({ id }) => {
       const userId = getSessionUserId();
+      const denied = requireOrgAdmin(userId, "delete_container");
+      if (denied) return denied;
       const organizationId = getSessionOrgId();
       const result = await deleteContainer(id, organizationId);
       logMcpRequest(userId, "delete_container", 0, "error" in result ? 400 : 200);

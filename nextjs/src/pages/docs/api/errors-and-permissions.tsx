@@ -22,6 +22,16 @@ export default function ErrorsAndPermissionsPage() {
         connected YouTube resources. A key without write access receives
         <code>INSUFFICIENT_PERMISSIONS</code> with HTTP 403.
       </p>
+      <h2>Organization roles</h2>
+      <p>
+        A key&apos;s permission and its owner&apos;s role are separate limits.
+        Destructive operations — deleting a comment, container, template,
+        playlist or playlist item, rewriting comments in bulk, and reverting a
+        description — additionally require the key owner to be an owner or admin
+        of the organization, the same rule the dashboard applies. A key owned by
+        a member receives <code>FORBIDDEN_ROLE</code> with HTTP 403, and nothing
+        is changed or billed.
+      </p>
       <h2>Common errors</h2>
       <p>
         Missing, invalid, expired, or no-longer-organization-scoped keys return

@@ -3,7 +3,12 @@ import { db } from "@/db";
 import { apiRequestLog } from "@/db/schema";
 import type { JsonValue } from "@/lib/services/types";
 
-const sessionStore = new AsyncLocalStorage<{ userId: string; organizationId: string }>();
+const sessionStore = new AsyncLocalStorage<{
+  userId: string;
+  organizationId: string;
+  /** The caller's `member.role` in that organization — see `requireOrgAdmin`. */
+  orgRole: string;
+}>();
 
 export { sessionStore };
 
@@ -17,6 +22,12 @@ export function getSessionOrgId(): string {
   const session = sessionStore.getStore();
   if (!session) throw new Error("No MCP session available");
   return session.organizationId;
+}
+
+export function getSessionOrgRole(): string {
+  const session = sessionStore.getStore();
+  if (!session) throw new Error("No MCP session available");
+  return session.orgRole;
 }
 
 /**
@@ -66,6 +77,30 @@ export function logMcpRequest(
 export function toMcp<T>(result: { data: T } | { error: { code: string; message: string; suggestion: string; meta?: Record<string, JsonValue> } }) {
   if ("error" in result) return mcpError(result.error.code, result.error.message, result.error.suggestion, result.error.meta);
   return mcpJson(result.data);
+}
+
+/**
+ * Refuses a destructive tool to anyone below admin, and returns the refusal to
+ * hand straight back — `const denied = requireOrgAdmin(userId, tool); if
+ * (denied) return denied;`. Returns null when the call may proceed.
+ *
+ * The predicate is the one `orgAdminProcedure` applies to the dashboard
+ * (`src/server/trpc/init.ts`): owner and admin, nobody else. tRPC used to be
+ * the only surface that checked, which left every destructive operation
+ * reachable by any member through MCP.
+ *
+ * The refusal is logged like any other call, so a blocked attempt still shows
+ * up in usage — a 403 with no YouTube call and no credits.
+ */
+export function requireOrgAdmin(userId: string, toolName: string) {
+  const role = getSessionOrgRole();
+  if (role === "owner" || role === "admin") return null;
+  logMcpRequest(userId, toolName, 0, 403);
+  return mcpError(
+    "FORBIDDEN_ROLE",
+    "This operation requires the owner or admin role in this workspace",
+    `Your role is '${role}'. Ask an owner or admin of the workspace to run it, or to raise your role.`
+  );
 }
 
 /**

@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, gte, inArray, lt, or, sql, type SQL } from "
 import { db } from "@/db";
 import { commentEdits } from "@/db/schema";
 import { getChannelTokens } from "@/lib/api-auth";
-import { consumeCredits } from "@/lib/plan-limits";
+import { consumeCredits, refundCredits } from "@/lib/plan-limits";
 import {
   listCommentThreads as ytListCommentThreads,
   searchChannelCommentThreads as ytSearchChannelCommentThreads,
@@ -19,7 +19,7 @@ import {
   type YouTubeComment,
   type YouTubeCommentThread,
 } from "@/lib/clients/youtube";
-import { mapYouTubeServiceError } from "@/lib/youtube-errors";
+import { mapYouTubeServiceError, youTubeErrorDetail } from "@/lib/youtube-errors";
 import { markYouTubeQuotaExhausted, nextQuotaResetAt } from "./quota-guard";
 import {
   decodeCompositeCursor,
@@ -135,6 +135,12 @@ const UC_CHANNEL_ID = /^UC[\w-]{22}$/;
  */
 export interface CreditMeter {
   charge(credits: number): void;
+  /**
+   * Takes a charge back off the tally after the ledger returned it. Every
+   * surface logs `meter.total` into `apiRequestLog.quotaUnits`, so without this
+   * the log would report credits the caller was not billed for.
+   */
+  refund(credits: number): void;
   readonly total: number;
 }
 
@@ -143,6 +149,9 @@ export function createCreditMeter(): CreditMeter {
   return {
     charge(credits: number) {
       total += credits;
+    },
+    refund(credits: number) {
+      total -= credits;
     },
     get total() {
       return total;
@@ -276,21 +285,55 @@ function internalError(): { error: ServiceError } {
 type ChargeOutcome = "ok" | "insufficient" | "error";
 
 /**
+ * What one charge did. `refundable` is what may be given back if the call it
+ * paid for turns out to have done nothing — 0 whenever nothing was really
+ * deducted, so a refund can never invent credits.
+ */
+interface Charge {
+  outcome: ChargeOutcome;
+  refundable: number;
+}
+
+/**
  * Consumes credits and records them on the caller's meter in one step, so the
  * two can never drift. A throw from the ledger is folded into `error` rather
  * than propagated: callers have snapshot rows to finalize before they return.
+ *
+ * `consumeCredits` *fails open*: on a DB error it reports success with an
+ * infinite `remaining` having deducted nothing at all. That path must never be
+ * refunded, so a finite `remaining` — the balance the UPDATE actually returned
+ * — is what marks a charge as genuinely deducted.
  */
-async function chargeCredits(ctx: CommentContext, cost: number): Promise<ChargeOutcome> {
+async function chargeCredits(ctx: CommentContext, cost: number): Promise<Charge> {
   let success: boolean;
+  let remaining: number;
   try {
-    ({ success } = await consumeCredits(ctx.organizationId, cost));
+    ({ success, remaining } = await consumeCredits(ctx.organizationId, cost));
   } catch (err) {
     console.error("comments: credit ledger unavailable", err);
-    return "error";
+    return { outcome: "error", refundable: 0 };
   }
-  if (!success) return "insufficient";
+  if (!success) return { outcome: "insufficient", refundable: 0 };
   ctx.meter.charge(cost);
-  return "ok";
+  return { outcome: "ok", refundable: Number.isFinite(remaining) ? cost : 0 };
+}
+
+/**
+ * Gives a charge back after the call it paid for provably did no work, and
+ * takes it off the meter so the request log reports the net.
+ *
+ * Only ever called where the evidence is definitive. An ambiguous write —
+ * a timeout, a 5xx, a dropped socket — may have landed on YouTube, and
+ * refunding one would bill nothing for work that really happened; the
+ * `comment_edits` status machine draws the same line (`failed` vs `unknown`).
+ */
+async function refundCharge(ctx: CommentContext, charge: Charge): Promise<void> {
+  if (charge.refundable <= 0) return;
+  // Only decrement the meter if the ledger really credited it back: an
+  // unreachable ledger means the caller stays billed, and the log must say so.
+  if (await refundCredits(ctx.organizationId, charge.refundable)) {
+    ctx.meter.refund(charge.refundable);
+  }
 }
 
 /** Maps a charge failure onto the envelope it deserves. */
@@ -298,8 +341,47 @@ function chargeError(outcome: "insufficient" | "error"): { error: ServiceError }
   return outcome === "insufficient" ? insufficientCredits() : internalError();
 }
 
-/** Maps a thrown YouTube error into the service envelope. */
-function youtubeError(err: unknown): { error: ServiceError } {
+/**
+ * Which YouTube call failed, and on whose behalf. Carried only so a failure
+ * can name itself in the logs — nothing branches on it.
+ */
+interface YouTubeCallContext {
+  /** The service operation, plus the step within it: `updateComment:write`. */
+  operation: string;
+  channelId: string;
+  organizationId: string;
+}
+
+/**
+ * Records why a YouTube call failed. Every throw in this file passes through
+ * here, so a bare 400 in the platform logs stops being the whole story.
+ *
+ * `reason` is the field that names the cause — `processingFailure`,
+ * `insufficientPermissions`, `quotaExceeded` — and it is read off the raw throw
+ * rather than the mapped envelope, which carries `reasons` on quota errors
+ * alone. A 403 is exactly the case where the envelope has dropped it.
+ *
+ * Never logs a token or any comment text: the operation, the ids, and
+ * YouTube's own message about its own refusal.
+ */
+function logYouTubeFailure(err: unknown, context: YouTubeCallContext): void {
+  const mapped = mapYouTubeServiceError(err);
+  const detail = youTubeErrorDetail(err);
+  console.error("comments: YouTube call failed", {
+    operation: context.operation,
+    channelId: context.channelId,
+    organizationId: context.organizationId,
+    code: mapped.code,
+    status: mapped.status,
+    upstreamStatus: detail.upstreamStatus,
+    reasons: detail.reasons,
+    upstreamMessage: detail.message,
+  });
+}
+
+/** Maps a thrown YouTube error into the service envelope, and logs the cause. */
+function youtubeError(err: unknown, context: YouTubeCallContext): { error: ServiceError } {
+  logYouTubeFailure(err, context);
   const mapped = mapYouTubeServiceError(err);
   const meta: Record<string, JsonValue> = {};
   if (mapped.meta?.upstreamStatus !== undefined) meta.upstreamStatus = mapped.meta.upstreamStatus;
@@ -352,22 +434,44 @@ async function resolveChannelToken(
  * write, and `snapshottedWrite` below owns that sequence.
  */
 async function meteredCall<T>(
-  channelId: string,
+  spec: {
+    /** Names the failing call in the logs. */
+    operation: string;
+    channelId: string;
+    /** Sets the cost, and what a throw is allowed to refund. */
+    effect: "read" | "write";
+  },
   ctx: CommentContext,
-  cost: number,
   call: (accessToken: string) => Promise<T>
 ): Promise<ServiceResult<T>> {
+  const { operation, channelId, effect } = spec;
   const token = await resolveChannelToken(channelId, ctx);
   if ("error" in token) return token;
 
-  const charge = await chargeCredits(ctx, cost);
-  if (charge !== "ok") return chargeError(charge);
+  const charge = await chargeCredits(ctx, effect === "read" ? READ_CREDITS : WRITE_CREDITS);
+  if (charge.outcome !== "ok") return chargeError(charge.outcome);
 
   try {
     return { data: await call(token.accessToken) };
   } catch (err) {
+    // A read that threw returned nothing and changed nothing, so its credit
+    // bought the caller no work at all — a channel whose token lacks the
+    // `youtube.force-ssl` scope 403s on every comment call, and without this
+    // it would drain a balance one retry at a time.
+    //
+    // A write is only refundable on the same evidence `comment_edits` demands
+    // for `failed`: YouTube answered 4xx, so the comment provably never
+    // changed. A timeout or a 5xx may have landed, and these two verbs post
+    // new content with no snapshot row to reconcile it against later.
+    if (effect === "read" || isDefinitiveYouTubeRejection(err)) {
+      await refundCharge(ctx, charge);
+    }
     await noteQuotaHalt(err);
-    return youtubeError(err);
+    return youtubeError(err, {
+      operation,
+      channelId,
+      organizationId: ctx.organizationId,
+    });
   }
 }
 
@@ -382,8 +486,10 @@ export async function listCommentThreads(
   ctx: CommentContext,
   opts: { maxResults?: number; order?: string; pageToken?: string } = {}
 ): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string }>> {
-  return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
-    ytListCommentThreads(accessToken, videoId, opts)
+  return meteredCall(
+    { operation: "listCommentThreads", channelId, effect: "read" },
+    ctx,
+    (accessToken) => ytListCommentThreads(accessToken, videoId, opts)
   );
 }
 
@@ -403,8 +509,10 @@ export async function searchChannelComments(
   ctx: CommentContext,
   opts: { searchTerms?: string; maxResults?: number; pageToken?: string } = {}
 ): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string }>> {
-  return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
-    ytSearchChannelCommentThreads(accessToken, channelId, opts)
+  return meteredCall(
+    { operation: "searchChannelComments", channelId, effect: "read" },
+    ctx,
+    (accessToken) => ytSearchChannelCommentThreads(accessToken, channelId, opts)
   );
 }
 
@@ -420,8 +528,10 @@ export async function getCommentReplies(
   ctx: CommentContext,
   opts: { maxResults?: number; pageToken?: string } = {}
 ): Promise<ServiceResult<{ items: YouTubeComment[]; nextPageToken?: string }>> {
-  return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
-    ytListCommentReplies(accessToken, parentId, opts)
+  return meteredCall(
+    { operation: "getCommentReplies", channelId, effect: "read" },
+    ctx,
+    (accessToken) => ytListCommentReplies(accessToken, parentId, opts)
   );
 }
 
@@ -549,9 +659,13 @@ export async function replyToComment(
   text: string,
   ctx: CommentContext
 ): Promise<ServiceResult<{ comment: YouTubeComment }>> {
-  return meteredCall(channelId, ctx, WRITE_CREDITS, async (accessToken) => ({
-    comment: await ytReplyToComment(accessToken, parentId, text),
-  }));
+  return meteredCall(
+    { operation: "replyToComment", channelId, effect: "write" },
+    ctx,
+    async (accessToken) => ({
+      comment: await ytReplyToComment(accessToken, parentId, text),
+    })
+  );
 }
 
 // ── post_comment ─────────────────────────────────────────────
@@ -566,9 +680,13 @@ export async function postComment(
   text: string,
   ctx: CommentContext
 ): Promise<ServiceResult<{ thread: YouTubeCommentThread }>> {
-  return meteredCall(channelId, ctx, WRITE_CREDITS, async (accessToken) => ({
-    thread: await ytPostCommentThread(accessToken, videoId, text),
-  }));
+  return meteredCall(
+    { operation: "postComment", channelId, effect: "write" },
+    ctx,
+    async (accessToken) => ({
+      thread: await ytPostCommentThread(accessToken, videoId, text),
+    })
+  );
 }
 
 // ── update_comment ───────────────────────────────────────────
@@ -667,18 +785,26 @@ async function snapshottedWrite<T>(
     write: (accessToken: string) => Promise<T>;
   }
 ): Promise<ServiceResult<T & { editId: string }>> {
+  const operation = spec.verb === "update" ? "updateComment" : "deleteComment";
   const token = await resolveChannelToken(channelId, ctx);
   if ("error" in token) return token;
 
   const readCharge = await chargeCredits(ctx, READ_CREDITS);
-  if (readCharge !== "ok") return chargeError(readCharge);
+  if (readCharge.outcome !== "ok") return chargeError(readCharge.outcome);
 
   let comment: YouTubeComment | null;
   try {
     comment = await ytGetCommentById(token.accessToken, commentId);
   } catch (err) {
+    // The snapshot read returned nothing, so nothing was snapshotted and
+    // nothing was written — the same refund a plain read gets.
+    await refundCharge(ctx, readCharge);
     await noteQuotaHalt(err);
-    return youtubeError(err);
+    return youtubeError(err, {
+      operation: `${operation}:snapshotRead`,
+      channelId,
+      organizationId: ctx.organizationId,
+    });
   }
   if (!comment) return snapshotFailed(commentId);
   spec.inspect?.(comment);
@@ -714,10 +840,10 @@ async function snapshottedWrite<T>(
   }
 
   const writeCharge = await chargeCredits(ctx, WRITE_CREDITS);
-  if (writeCharge !== "ok") {
+  if (writeCharge.outcome !== "ok") {
     // A known-unattempted write: the row can be finalized now.
     await setEditStatus(editId, "failed");
-    return chargeError(writeCharge);
+    return chargeError(writeCharge.outcome);
   }
 
   try {
@@ -729,8 +855,20 @@ async function snapshottedWrite<T>(
     // will ever visit a row this path leaves behind — least of all a `delete`
     // row, since there is no bulk delete at all.
     await settleFailedWrite(editId, err, "terminal");
+    // Refund the write on exactly the evidence that just finalized the row
+    // `failed`: YouTube answered 4xx, so the comment provably never changed.
+    // A row left `unknown` is never refunded — the write may have landed, and
+    // billing nothing for a write that really happened is the worse error.
+    //
+    // The read charge stands either way: that call succeeded and spent real
+    // YouTube quota to produce the snapshot.
+    if (isDefinitiveYouTubeRejection(err)) await refundCharge(ctx, writeCharge);
     await noteQuotaHalt(err);
-    return youtubeError(err);
+    return youtubeError(err, {
+      operation: `${operation}:write`,
+      channelId,
+      organizationId: ctx.organizationId,
+    });
   }
 }
 
@@ -825,7 +963,7 @@ export async function bulkUpdateComments(
     if (!canStartCall()) break;
 
     const charge = await chargeCredits(ctx, READ_CREDITS);
-    if (charge !== "ok") return chargeError(charge);
+    if (charge.outcome !== "ok") return chargeError(charge.outcome);
     reconciled.scanned += 1;
 
     let live: YouTubeComment | null;
@@ -834,6 +972,17 @@ export async function bulkUpdateComments(
       // as an empty item list or as a 404 — the client normalizes both.
       live = await ytGetCommentById(accessToken, row.commentId);
     } catch (err) {
+      // The read told the sweep nothing, so it bills nothing. `scanned` still
+      // counts the row: it was examined, and its status below depends on it.
+      await refundCharge(ctx, charge);
+      // The sweep swallows this failure rather than returning an envelope, so
+      // it logs the cause itself — otherwise a row that no batch can ever read
+      // fails invisibly, every batch, forever.
+      logYouTubeFailure(err, {
+        operation: "bulkUpdateComments:reconcileRead",
+        channelId,
+        organizationId: ctx.organizationId,
+      });
       const halt = haltReason(err);
       if (halt) {
         await noteBulkHalt(halt);
@@ -880,18 +1029,26 @@ export async function bulkUpdateComments(
     if (!canStartCall()) return abort(outOfTimeError(reconciled));
 
     const charge = await chargeCredits(ctx, READ_CREDITS);
-    if (charge !== "ok") return abort(chargeError(charge));
+    if (charge.outcome !== "ok") return abort(chargeError(charge.outcome));
 
     let comment: YouTubeComment | null;
     try {
       comment = await ytGetCommentById(accessToken, item.id);
     } catch (err) {
+      // No snapshot, so no write: the read bills nothing.
+      await refundCharge(ctx, charge);
       const halt = haltReason(err);
       if (halt) {
         await noteBulkHalt(halt);
         return abort(haltedError(halt, reconciled));
       }
-      return abort(youtubeError(err));
+      return abort(
+        youtubeError(err, {
+          operation: "bulkUpdateComments:snapshotRead",
+          channelId,
+          organizationId: ctx.organizationId,
+        })
+      );
     }
 
     if (!comment) return abort(snapshotFailed(item.id, reconciled));
@@ -962,7 +1119,7 @@ export async function bulkUpdateComments(
     }
 
     const charge = await chargeCredits(ctx, WRITE_CREDITS);
-    if (charge !== "ok") {
+    if (charge.outcome !== "ok") {
       // Every remaining item costs the same, so the balance cannot recover;
       // and a ledger that just threw will not answer the next item either.
       await setEditStatus(editId, "failed");
@@ -970,7 +1127,7 @@ export async function bulkUpdateComments(
         id: item.id,
         status: "error",
         error:
-          charge === "insufficient"
+          charge.outcome === "insufficient"
             ? { code: "QUOTA_EXCEEDED", message: "Insufficient credits" }
             : { code: "INTERNAL_ERROR", message: "The credit ledger was unavailable" },
       });
@@ -986,6 +1143,10 @@ export async function bulkUpdateComments(
       // "reconcilable": this row is a bulk `update` for `channelId`, which is
       // exactly what phase 0 of the next batch for this org and channel sweeps.
       await settleFailedWrite(editId, err, "reconcilable");
+      // Same rule as the single-item write: refund only what YouTube provably
+      // refused. A row left `pending` for phase 0 stays billed — it may have
+      // landed, and the sweep that settles it must not have to unbill it.
+      if (isDefinitiveYouTubeRejection(err)) await refundCharge(ctx, charge);
 
       const halt = haltReason(err);
       if (halt) {
@@ -1007,7 +1168,13 @@ export async function bulkUpdateComments(
         continue;
       }
 
-      const mapped = mapYouTubeServiceError(err);
+      // Through `youtubeError` rather than the mapper directly, so a per-item
+      // failure inside a batch names its cause in the logs like any other.
+      const { error: mapped } = youtubeError(err, {
+        operation: "bulkUpdateComments:write",
+        channelId,
+        organizationId: ctx.organizationId,
+      });
       results.push({
         id: item.id,
         status: "error",
