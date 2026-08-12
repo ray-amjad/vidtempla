@@ -393,11 +393,15 @@ export async function listCommentThreads(
  * Searches every comment thread related to a channel, optionally narrowed by
  * `searchTerms` — the primary discovery step of a course-link sweep (I1: state
  * is never stored, comments are re-found live). 1 credit per page.
+ *
+ * Results always come back newest-first. YouTube cannot order a channel-wide
+ * search by relevance — see `searchChannelCommentThreads` — so there is no
+ * `order` option to pass through; per-video listing keeps one.
  */
 export async function searchChannelComments(
   channelId: string,
   ctx: CommentContext,
-  opts: { searchTerms?: string; maxResults?: number; order?: string; pageToken?: string } = {}
+  opts: { searchTerms?: string; maxResults?: number; pageToken?: string } = {}
 ): Promise<ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string }>> {
   return meteredCall(channelId, ctx, READ_CREDITS, (accessToken) =>
     ytSearchChannelCommentThreads(accessToken, channelId, opts)

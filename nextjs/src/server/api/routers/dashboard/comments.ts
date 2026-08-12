@@ -168,13 +168,16 @@ const pageSchema = {
 export const commentsRouter = router({
   // ==================== Member tier ====================
 
-  /** Channel-wide comment search — the discovery step of a course-link sweep. 1 credit per page. */
+  /**
+   * Channel-wide comment search — the discovery step of a course-link sweep.
+   * 1 credit per page. Always newest-first: YouTube cannot order a channel-wide
+   * search by relevance, so there is no `order` input to offer.
+   */
   search: orgProcedure
     .input(
       z.object({
         channelId: channelIdSchema,
         searchTerms: z.string().optional(),
-        order: z.enum(["time", "relevance"]).optional(),
         ...pageSchema,
       })
     )
@@ -182,7 +185,6 @@ export const commentsRouter = router({
       metered(ctx, "search", (context) =>
         searchChannelComments(input.channelId, context, {
           searchTerms: input.searchTerms,
-          order: input.order,
           maxResults: input.maxResults,
           pageToken: input.cursor,
         })
