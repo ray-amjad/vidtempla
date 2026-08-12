@@ -32,11 +32,15 @@ export function getSessionOrgRole(): string {
 
 /**
  * Wraps data as MCP tool result content.
+ *
+ * Unindented on purpose: comment threads nest six levels deep, so pretty
+ * printing spent 8-12 leading spaces on most lines of the largest responses.
+ * This is transport, not a document — no consumer reads it unparsed.
  */
 export function mcpJson<T>(data: T) {
   return {
     content: [
-      { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      { type: "text" as const, text: JSON.stringify(data) },
     ],
   };
 }
