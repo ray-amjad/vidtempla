@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   withApiKey,
   requireWriteAccess,
+  requireOrgAdmin,
   apiSuccess,
   apiError,
   logRequest,
@@ -35,6 +36,8 @@ const BodySchema = bulkUpdateInputSchema;
  * each reported in `halted`. Earlier items stay applied, the rest come back as
  * `skipped` and were never billed; resend those IDs to resume.
  *
+ * Requires the owner or admin role — same as the dashboard.
+ *
  * Body: { channelId, items: [{ id, videoId?, text }] }
  * Quota cost: 51 units per item (1 snapshot read + 50 write), plus 1 per stale
  * row reconciled from an interrupted earlier batch. Only attempted items bill.
@@ -44,6 +47,8 @@ export async function POST(request: NextRequest) {
   if (ctx instanceof NextResponse) return ctx;
   const writeCheck = requireWriteAccess(ctx);
   if (writeCheck) return writeCheck;
+  const roleCheck = requireOrgAdmin(ctx, ENDPOINT, "POST");
+  if (roleCheck) return roleCheck;
 
   let rawBody: unknown;
   try {

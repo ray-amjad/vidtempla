@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withApiKey, requireWriteAccess, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
+import { withApiKey, requireWriteAccess, requireOrgAdmin, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
 import { getTemplate, updateTemplate, deleteTemplate } from "@/lib/services/templates";
 
 export async function GET(
@@ -58,6 +58,9 @@ export async function DELETE(
   if (writeCheck) return writeCheck;
 
   const { id } = await params;
+  const roleCheck = requireOrgAdmin(auth, `/v1/templates/${id}`, "DELETE");
+  if (roleCheck) return roleCheck;
+
   const result = await deleteTemplate(id, auth.organizationId);
 
   if ("error" in result) {

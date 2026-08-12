@@ -22,7 +22,11 @@ const mcpHandler = withMcpAuth(auth, async (req, session) => {
 
   // Resolve user's organization for MCP context
   // Prefer activeOrganizationId from the user's most recent session, fallback to oldest membership
+  // The role rides along with the organization it belongs to: `requireOrgAdmin`
+  // gates the destructive tools on it, and both queries below already read the
+  // membership row, so selecting it costs no extra query.
   let organizationId: string | undefined;
+  let orgRole: string | undefined;
 
   const [latestSession] = await db
     .select({ activeOrganizationId: sessionTable.activeOrganizationId })
@@ -36,7 +40,7 @@ const mcpHandler = withMcpAuth(auth, async (req, session) => {
     // If they were removed but their session row still has the stale
     // activeOrganizationId, fall through to the membership-based fallback.
     const [activeMembership] = await db
-      .select({ id: member.id })
+      .select({ id: member.id, role: member.role })
       .from(member)
       .where(
         and(
@@ -47,17 +51,19 @@ const mcpHandler = withMcpAuth(auth, async (req, session) => {
       .limit(1);
     if (activeMembership) {
       organizationId = latestSession.activeOrganizationId;
+      orgRole = activeMembership.role;
     }
   }
 
   if (!organizationId) {
     const [membership] = await db
-      .select({ organizationId: member.organizationId })
+      .select({ organizationId: member.organizationId, role: member.role })
       .from(member)
       .where(eq(member.userId, session.userId))
       .orderBy(asc(member.createdAt))
       .limit(1);
     organizationId = membership?.organizationId;
+    orgRole = membership?.role;
   }
 
   if (!organizationId) {
@@ -67,7 +73,13 @@ const mcpHandler = withMcpAuth(auth, async (req, session) => {
     );
   }
 
-  return sessionStore.run({ userId: session.userId, organizationId }, () => mcpRouteHandler(req));
+  return sessionStore.run(
+    // `orgRole` comes from the same row that resolved `organizationId`, so it
+    // is only ever undefined if that row carried no role at all; treat that as
+    // the least privilege rather than as admin.
+    { userId: session.userId, organizationId, orgRole: orgRole ?? "member" },
+    () => mcpRouteHandler(req)
+  );
 });
 
 const HANDLER_TIMEOUT_MS = 55_000;

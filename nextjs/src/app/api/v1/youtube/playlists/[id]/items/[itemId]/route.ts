@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   withApiKey,
   requireWriteAccess,
+  requireOrgAdmin,
   apiSuccess,
   apiError,
   getChannelTokens,
@@ -15,6 +16,7 @@ const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 /**
  * DELETE /api/v1/youtube/playlists/[id]/items/[itemId]?channelId=...
  * Remove an item from a playlist
+ * Requires the owner or admin role — same as the dashboard.
  * Quota cost: 50 units
  */
 export async function DELETE(
@@ -27,6 +29,13 @@ export async function DELETE(
   if (writeCheck) return writeCheck;
 
   const { id, itemId } = await params;
+  const roleCheck = requireOrgAdmin(
+    ctx,
+    `/youtube/playlists/${id}/items/${itemId}`,
+    "DELETE"
+  );
+  if (roleCheck) return roleCheck;
+
   const { searchParams } = new URL(request.url);
   const channelId = searchParams.get("channelId");
 

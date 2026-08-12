@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { toMcp, mcpQuotaExceeded, getSessionUserId, getSessionOrgId, logMcpRequest, READ, WRITE, DESTRUCTIVE } from "../helpers";
+import { toMcp, mcpQuotaExceeded, getSessionUserId, getSessionOrgId, logMcpRequest, requireOrgAdmin, READ, WRITE, DESTRUCTIVE } from "../helpers";
 import { consumeCredits } from "@/lib/plan-limits";
 import {
   listVideos,
@@ -196,7 +196,7 @@ export function registerVideoTools(server: McpServer) {
 
   server.tool(
     "revert_description",
-    "Revert a video's description to a previous version. This delinks the video from its container, clears all template variables, and pushes the historical description to YouTube.",
+    "Revert a video's description to a previous version. Requires the owner or admin role in the workspace; a member gets FORBIDDEN_ROLE and nothing is changed. This delinks the video from its container, clears all template variables, and pushes the historical description to YouTube.",
     {
       id: z.string().describe("VidTempla UUID or YouTube video ID"),
       historyId: z.string().describe("History entry UUID (from get_description_history)"),
@@ -204,6 +204,8 @@ export function registerVideoTools(server: McpServer) {
     DESTRUCTIVE,
     async ({ id, historyId }) => {
       const userId = getSessionUserId();
+      const denied = requireOrgAdmin(userId, "revert_description");
+      if (denied) return denied;
       const orgId = getSessionOrgId();
       const result = await revertDescription(id, historyId, userId, orgId);
       logMcpRequest(userId, "revert_description", 0, "error" in result ? 400 : 200);

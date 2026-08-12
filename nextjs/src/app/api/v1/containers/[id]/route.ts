@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withApiKey, requireWriteAccess, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
+import { withApiKey, requireWriteAccess, requireOrgAdmin, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
 import { getContainer, updateContainer, deleteContainer } from "@/lib/services/containers";
 
 export async function GET(
@@ -59,6 +59,11 @@ export async function DELETE(
   if (writeCheck) return writeCheck;
 
   const { id } = await params;
+  // Deleting a container unassigns its videos — admin or owner only, as in the
+  // dashboard.
+  const roleCheck = requireOrgAdmin(auth, `/v1/containers/${id}`, "DELETE");
+  if (roleCheck) return roleCheck;
+
   const result = await deleteContainer(id, auth.organizationId);
 
   if ("error" in result) {

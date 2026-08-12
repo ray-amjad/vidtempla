@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   withApiKey,
   requireWriteAccess,
+  requireOrgAdmin,
   apiSuccess,
   apiError,
   logRequest,
@@ -81,6 +82,7 @@ export async function GET(
 /**
  * DELETE /api/v1/youtube/comments/[id]?channelId=...&videoId=...
  * Delete a comment permanently (id = commentId)
+ * Requires the owner or admin role — same as the dashboard.
  * Quota cost: 51 units (1 snapshot read + 50 write)
  */
 export async function DELETE(
@@ -94,6 +96,8 @@ export async function DELETE(
 
   const { id: commentId } = await params;
   const endpoint = `/youtube/comments/${commentId}`;
+  const roleCheck = requireOrgAdmin(ctx, endpoint, "DELETE");
+  if (roleCheck) return roleCheck;
   const { searchParams } = new URL(request.url);
   const channelId = searchParams.get("channelId");
   const videoId = searchParams.get("videoId") || undefined;

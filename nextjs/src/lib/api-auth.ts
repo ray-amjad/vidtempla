@@ -15,6 +15,12 @@ export interface ApiContext {
   organizationId: string;
   apiKeyId: string;
   permission: "read" | "read-write";
+  /**
+   * The key owner's `member.role` in that organization. A key's permission and
+   * its owner's role are two different limits: the key says what it may do,
+   * the role says what its owner may do. `requireOrgAdmin` checks the second.
+   */
+  orgRole: string;
 }
 
 /**
@@ -97,8 +103,10 @@ export async function withApiKey(
     );
   }
 
+  // `role` rides along with the membership check that already runs on every
+  // request, so gating the destructive routes costs no extra query.
   const [membership] = await db
-    .select({ id: member.id })
+    .select({ id: member.id, role: member.role })
     .from(member)
     .where(
       and(
@@ -134,6 +142,7 @@ export async function withApiKey(
     organizationId: key.organizationId,
     apiKeyId: key.id,
     permission: key.permission as "read" | "read-write",
+    orgRole: membership.role,
   };
 }
 
@@ -206,6 +215,40 @@ export function requireWriteAccess(ctx: ApiContext): NextResponse | null {
       "INSUFFICIENT_PERMISSIONS",
       "This API key has read-only access",
       "Create a new API key with read-write permission from Settings > API Keys",
+      403
+    ),
+    { status: 403 }
+  );
+}
+
+/**
+ * Returns a 403 response if the key's owner is not an owner or admin of the
+ * organization, or null if allowed. Call it on the destructive routes, after
+ * `requireWriteAccess` and before any work:
+ *
+ *     const roleCheck = requireOrgAdmin(ctx, endpoint, "DELETE");
+ *     if (roleCheck) return roleCheck;
+ *
+ * Same predicate as `orgAdminProcedure` in `src/server/trpc/init.ts`, which
+ * was the only surface enforcing it — a member's API key could delete through
+ * REST what the dashboard refused them.
+ *
+ * Logs the refusal itself, since it returns before the route's own
+ * `logRequest`: a blocked call still belongs in usage, as a 403 that consumed
+ * nothing.
+ */
+export function requireOrgAdmin(
+  ctx: ApiContext,
+  endpoint: string,
+  method: string
+): NextResponse | null {
+  if (ctx.orgRole === "owner" || ctx.orgRole === "admin") return null;
+  logRequest(ctx, endpoint, method, 403, 0);
+  return NextResponse.json(
+    apiError(
+      "FORBIDDEN_ROLE",
+      "This operation requires the owner or admin role in this organization",
+      `This API key belongs to a '${ctx.orgRole}'. Ask an organization owner or admin to run it, or to raise the key owner's role.`,
       403
     ),
     { status: 403 }

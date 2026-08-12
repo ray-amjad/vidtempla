@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   withApiKey,
   requireWriteAccess,
+  requireOrgAdmin,
   apiSuccess,
   apiError,
   getChannelTokens,
@@ -195,6 +196,7 @@ export async function PATCH(
 /**
  * DELETE /api/v1/youtube/playlists/[id]?channelId=...
  * Delete a playlist
+ * Requires the owner or admin role — same as the dashboard.
  * Quota cost: 50 units
  */
 export async function DELETE(
@@ -207,6 +209,9 @@ export async function DELETE(
   if (writeCheck) return writeCheck;
 
   const { id } = await params;
+  const roleCheck = requireOrgAdmin(ctx, `/youtube/playlists/${id}`, "DELETE");
+  if (roleCheck) return roleCheck;
+
   const { searchParams } = new URL(request.url);
   const channelId = searchParams.get("channelId");
 

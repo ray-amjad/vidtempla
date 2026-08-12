@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { toMcp, mcpQuotaExceeded, getSessionUserId, getSessionOrgId, logMcpRequest, READ, WRITE, DESTRUCTIVE } from "../helpers";
+import { toMcp, mcpQuotaExceeded, getSessionUserId, getSessionOrgId, logMcpRequest, requireOrgAdmin, READ, WRITE, DESTRUCTIVE } from "../helpers";
 import { consumeCredits } from "@/lib/plan-limits";
 import {
   listPlaylists,
@@ -98,7 +98,7 @@ export function registerPlaylistTools(server: McpServer) {
 
   server.tool(
     "delete_playlist",
-    "Permanently delete a YouTube playlist. This cannot be undone. All items in the playlist will be removed (videos themselves are not deleted).",
+    "Permanently delete a YouTube playlist. This cannot be undone. Requires the owner or admin role in the workspace; a member gets FORBIDDEN_ROLE and nothing is deleted. All items in the playlist will be removed (videos themselves are not deleted).",
     {
       playlistId: z.string().describe("YouTube playlist ID to delete"),
       channelId: z.string().describe("YouTube channel ID that owns the playlist"),
@@ -106,6 +106,9 @@ export function registerPlaylistTools(server: McpServer) {
     DESTRUCTIVE,
     async ({ playlistId, channelId }) => {
       const userId = getSessionUserId();
+      // Before the ledger: a refused call bills nothing and touches no channel.
+      const denied = requireOrgAdmin(userId, "delete_playlist");
+      if (denied) return denied;
       const orgId = getSessionOrgId();
       const credits = await consumeCredits(orgId, 50);
       if (!credits.success) return mcpQuotaExceeded(userId, "delete_playlist");
@@ -158,7 +161,7 @@ export function registerPlaylistTools(server: McpServer) {
 
   server.tool(
     "delete_playlist_item",
-    "Remove a video from a YouTube playlist. Use list_playlist_items to find the item ID (this is different from the video ID).",
+    "Remove a video from a YouTube playlist. Requires the owner or admin role in the workspace; a member gets FORBIDDEN_ROLE and nothing is removed. Use list_playlist_items to find the item ID (this is different from the video ID).",
     {
       itemId: z.string().describe("Playlist item ID (from list_playlist_items, NOT the video ID)"),
       channelId: z.string().describe("YouTube channel ID that owns the playlist"),
@@ -166,6 +169,8 @@ export function registerPlaylistTools(server: McpServer) {
     DESTRUCTIVE,
     async ({ itemId, channelId }) => {
       const userId = getSessionUserId();
+      const denied = requireOrgAdmin(userId, "delete_playlist_item");
+      if (denied) return denied;
       const orgId = getSessionOrgId();
       const credits = await consumeCredits(orgId, 50);
       if (!credits.success) return mcpQuotaExceeded(userId, "delete_playlist_item");

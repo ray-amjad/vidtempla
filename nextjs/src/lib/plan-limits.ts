@@ -240,6 +240,49 @@ export async function consumeCredits(
 }
 
 /**
+ * Returns credits to an organization's balance — the inverse of
+ * `consumeCredits`, for a call that was charged and then provably did no work.
+ *
+ * Only a caller that knows its charge really deducted may call this.
+ * `consumeCredits` fails open, returning success with an infinite `remaining`
+ * having deducted nothing; refunding that path would mint credits from nothing.
+ *
+ * Reports whether the balance was actually credited back, so a caller can keep
+ * its own tally of what the request cost honest when the ledger is unreachable.
+ * Never throws: it runs on error paths that have their own work to finish.
+ */
+export async function refundCredits(
+  organizationId: string,
+  quotaUnits: number
+): Promise<boolean> {
+  if (quotaUnits <= 0) return false;
+
+  try {
+    // `balance + n` is arithmetic in SET — one of the documented raw-`sql`
+    // exceptions. The organization id goes through `eq` so the column's
+    // encoder still runs.
+    const rows = await defaultDb
+      .update(userCredits)
+      .set({ balance: sql`${userCredits.balance} + ${quotaUnits}`, updatedAt: new Date() })
+      .where(eq(userCredits.organizationId, organizationId))
+      .returning({ balance: userCredits.balance });
+    // An org with no ledger row was never charged, so nothing was given back.
+    return rows.length > 0;
+  } catch (err) {
+    const cause = (err as { cause?: unknown })?.cause;
+    console.error("[refundCredits] DB error — credits were not returned", {
+      organizationId,
+      quotaUnits,
+      error: err instanceof Error ? err.message : String(err),
+      cause: cause instanceof Error
+        ? { message: cause.message, ...(cause as unknown as Record<string, unknown>) }
+        : cause,
+    });
+    return false;
+  }
+}
+
+/**
  * Get current credit balance and period info for an organization.
  */
 export async function getCredits(

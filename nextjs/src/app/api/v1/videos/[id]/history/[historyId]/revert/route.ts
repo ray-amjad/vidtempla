@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withApiKey, requireWriteAccess, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
+import { withApiKey, requireWriteAccess, requireOrgAdmin, apiSuccess, apiError, logRequest } from "@/lib/api-auth";
 import { revertDescription } from "@/lib/services/videos";
 
 export async function POST(
@@ -12,6 +12,15 @@ export async function POST(
   if (writeCheck) return writeCheck;
 
   const { id, historyId } = await params;
+  // A revert delinks the video, clears its variables and pushes an old
+  // description to YouTube — admin or owner only, as in the dashboard.
+  const roleCheck = requireOrgAdmin(
+    auth,
+    `/v1/videos/${id}/history/${historyId}/revert`,
+    "POST"
+  );
+  if (roleCheck) return roleCheck;
+
   const result = await revertDescription(id, historyId, auth.userId, auth.organizationId);
 
   if ("error" in result) {
