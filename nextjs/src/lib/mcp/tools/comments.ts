@@ -16,6 +16,14 @@ import {
   type CommentContext,
 } from "@/lib/services/comments";
 import { bulkUpdateInputShape } from "@/lib/comment-schemas";
+import {
+  leanComment,
+  leanThread,
+  threadAuthoredByChannel,
+  type LeanComment,
+  type LeanThread,
+} from "../comment-projection";
+import type { YouTubeComment, YouTubeCommentThread } from "@/lib/clients/youtube";
 import type { ServiceResult } from "@/lib/services/types";
 
 /**
@@ -49,20 +57,55 @@ function finish<T>(
   return toMcp(result);
 }
 
+/**
+ * Filters and trims a page of threads. Filtering runs on the raw threads, so
+ * `authoredByChannel` and `verbose` are independent.
+ */
+function shapeThreads(
+  result: ServiceResult<{ items: YouTubeCommentThread[]; nextPageToken?: string }>,
+  channelId: string,
+  opts: { verbose?: boolean; authoredByChannel?: boolean }
+): ServiceResult<{
+  items: Array<YouTubeCommentThread | LeanThread>;
+  nextPageToken?: string;
+}> {
+  if ("error" in result) return result;
+  const filtered = opts.authoredByChannel
+    ? result.data.items.filter((thread) => threadAuthoredByChannel(thread, channelId))
+    : result.data.items;
+  return {
+    data: {
+      ...result.data,
+      items: opts.verbose ? filtered : filtered.map(leanThread),
+    },
+  };
+}
+
+function shapeReplies(
+  result: ServiceResult<{ items: YouTubeComment[]; nextPageToken?: string }>,
+  verbose: boolean | undefined
+): ServiceResult<{ items: Array<YouTubeComment | LeanComment>; nextPageToken?: string }> {
+  if ("error" in result) return result;
+  if (verbose) return result;
+  return { data: { ...result.data, items: result.data.items.map(leanComment) } };
+}
+
 export function registerCommentTools(server: McpServer) {
   server.tool(
     "list_comment_threads",
-    "List or search top-level comment threads. Pass videoId for one video's threads, or searchTerms to search every comment across the channel (the way to find comments containing a given URL). Returns up to 100 threads per page with pagination support. Costs 1 credit per page.",
+    "List or search top-level comment threads. Pass videoId for one video's threads, or searchTerms to search every comment across the channel (the way to find comments containing a given URL). Returns up to 100 threads per page with pagination support. Costs 1 credit per page. YouTube's comment search index lags edits by hours, so a searchTerms match may return text that has already been rewritten — read the text in the response before concluding a write did not apply.",
     {
       channelId: z.string().describe("YouTube channel ID to read as (UC... — the channel connected to this workspace)"),
       videoId: z.string().optional().describe("YouTube video ID (e.g. 'dQw4w9WgXcQ') — omit to search channel-wide with searchTerms"),
       searchTerms: z.string().optional().describe("Search channel-wide for threads whose text matches, e.g. an old course URL. Ignored when videoId is set."),
+      authoredByChannel: z.boolean().optional().describe("Keep only threads where channelId authored the top-level comment or one of the inlined replies — the candidate list for update_comments, which rejects a batch containing any comment channelId did not write. Two caveats: YouTube inlines only a partial subset of replies, so a reply-only match can be missed (get_comment_replies is the complete read); and filtering happens after the page is fetched, so a page can return fewer than maxResults and still carry a nextPageToken. Quota is 1 unit per page either way."),
       maxResults: z.number().optional().describe("Number of threads to return (1-100, default 20)"),
       order: z.enum(["relevance", "time"]).optional().describe("Sort order for a videoId lookup: 'relevance' (default) or 'time' (newest first). Ignored for a channel-wide searchTerms search, which YouTube only returns newest-first."),
       pageToken: z.string().optional().describe("Pagination token from a previous response's nextPageToken"),
+      verbose: z.boolean().optional().describe("Return YouTube's raw payload instead of the trimmed one. The default response keeps the ids, text, author, like count and timestamps and drops profile images, etags and rating fields; twenty raw threads run to roughly 60,000 characters. Set true only when you need a dropped field."),
     },
     READ,
-    async ({ channelId, videoId, searchTerms, maxResults, order, pageToken }) => {
+    async ({ channelId, videoId, searchTerms, authoredByChannel, maxResults, order, pageToken, verbose }) => {
       const userId = getSessionUserId();
       if (!videoId && !searchTerms) {
         logMcpRequest(userId, "list_comment_threads", 0, 400);
@@ -80,7 +123,12 @@ export function registerCommentTools(server: McpServer) {
             maxResults,
             pageToken,
           });
-      return finish(userId, "list_comment_threads", context, result);
+      return finish(
+        userId,
+        "list_comment_threads",
+        context,
+        shapeThreads(result, channelId, { verbose, authoredByChannel })
+      );
     }
   );
 
@@ -92,16 +140,17 @@ export function registerCommentTools(server: McpServer) {
       parentId: z.string().describe("The top-level comment ID whose replies to list"),
       maxResults: z.number().optional().describe("Number of replies to return (1-100, default 20)"),
       pageToken: z.string().optional().describe("Pagination token from a previous response's nextPageToken"),
+      verbose: z.boolean().optional().describe("Return YouTube's raw payload instead of the trimmed one. The default response keeps the ids, text, author, like count and timestamps and drops profile images, etags and rating fields. Set true only when you need a dropped field."),
     },
     READ,
-    async ({ channelId, parentId, maxResults, pageToken }) => {
+    async ({ channelId, parentId, maxResults, pageToken, verbose }) => {
       const userId = getSessionUserId();
       const context = ctx();
       const result = await getCommentReplies(channelId, parentId, context, {
         maxResults,
         pageToken,
       });
-      return finish(userId, "get_comment_replies", context, result);
+      return finish(userId, "get_comment_replies", context, shapeReplies(result, verbose));
     }
   );
 
