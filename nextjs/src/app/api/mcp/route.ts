@@ -12,7 +12,15 @@ const mcpRouteHandler = createMcpHandler(
   (server) => {
     registerAllTools(server);
   },
-  { serverInfo: { name: "VidTempla", version: "1.0.0" } },
+  {
+    serverInfo: { name: "VidTempla", version: "1.0.0" },
+    // Sent in the `initialize` response; clients inject this into the agent's
+    // context, so keep it to a sentence or two.
+    instructions:
+      "VidTempla gives agents most of the YouTube Data and Analytics APIs, " +
+      "plus a description templating system that keeps video descriptions in sync. " +
+      "Source and docs: https://github.com/ray-amjad/vidtempla",
+  },
   { basePath: "/api", maxDuration: 60, disableSse: true }
 );
 
