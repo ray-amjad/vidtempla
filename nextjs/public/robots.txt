@@ -73,9 +73,6 @@ Disallow: /
 User-agent: k2spider
 Disallow: /
 
-User-agent: GPTBot
-Disallow: /
-
 # Misbehaving: requests much too fast:
 User-agent: fast
 Disallow: /
@@ -95,6 +92,68 @@ Disallow: /
 
 #
 # Rules for all bots start here
+#
+#
+# AI crawlers are welcome on public pages. Same closed paths as everyone
+# else, listed here too so the two rule sets cannot drift apart.
+#
+User-agent: GPTBot
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: OAI-SearchBot
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: ChatGPT-User
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: ClaudeBot
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: Claude-Web
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: Claude-User
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: Google-Extended
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: Applebot-Extended
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: CCBot
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: Meta-ExternalAgent
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+#
+# Rules for all other bots.
 #
 User-agent: *
 
