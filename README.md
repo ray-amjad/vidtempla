@@ -180,8 +180,10 @@ npx drizzle-kit generate
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+Copyright 2026 Ray Amjad.
 
-See the [LICENSE.md](./LICENSE.md) file for the full license text.
+This project is licensed under the **Apache License, Version 2.0 (Apache-2.0)**.
 
-For more information, visit: https://www.gnu.org/licenses/agpl-3.0.en.html
+See the [LICENSE](./LICENSE) file for the full license text.
+
+For more information, visit the [Apache License 2.0 text](https://www.apache.org/licenses/LICENSE-2.0).
