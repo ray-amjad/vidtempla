@@ -141,7 +141,23 @@
       "smol-toml": "^1.7.1",
       "undici@6": "^6.27.0",
       "undici@7": "^7.29.0",
-      "nanoid@3": "^3.3.18"
+      "nanoid@3": "^3.3.18",
+      "undici@5": "^6.27.0",
+      "@expo/metro": "56.0.2",
+      "metro": "0.84.5",
+      "metro-babel-transformer": "0.84.5",
+      "metro-cache": "0.84.5",
+      "metro-cache-key": "0.84.5",
+      "metro-config": "0.84.5",
+      "metro-core": "0.84.5",
+      "metro-file-map": "0.84.5",
+      "metro-minify-terser": "0.84.5",
+      "metro-resolver": "0.84.5",
+      "metro-runtime": "0.84.5",
+      "metro-source-map": "0.84.5",
+      "metro-symbolicate": "0.84.5",
+      "metro-transform-plugins": "0.84.5",
+      "metro-transform-worker": "0.84.5"
     }
   },
   "ct3aMetadata": {
