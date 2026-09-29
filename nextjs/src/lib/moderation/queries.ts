@@ -100,6 +100,12 @@ export interface ModerationOverview {
   scoreStatus: Record<string, number>;
   /** Stored comments per moderation state. */
   moderationState: Record<string, number>;
+  /**
+   * Stored comments a dry run may score: scored and not deleted (the filter of
+   * store.listForDryRun). The dashboard shows min(this, DRY_RUN_MAX_COMMENTS)
+   * as the credit cost before it runs (Ray answer 5).
+   */
+  dryRunCandidates: number;
 }
 
 export async function getModerationOverview(
@@ -141,9 +147,11 @@ export async function getModerationOverview(
 
   const scoreStatus: Record<string, number> = {};
   const moderationState: Record<string, number> = {};
+  let dryRunCandidates = 0;
   for (const s of statuses) {
     scoreStatus[s.scoreStatus] = (scoreStatus[s.scoreStatus] ?? 0) + s.n;
     moderationState[s.moderationState] = (moderationState[s.moderationState] ?? 0) + s.n;
+    if (s.scoreStatus === "scored" && s.moderationState !== "deleted") dryRunCandidates += s.n;
   }
 
   return {
@@ -167,6 +175,7 @@ export async function getModerationOverview(
       },
       scoreStatus,
       moderationState,
+      dryRunCandidates,
     },
   };
 }

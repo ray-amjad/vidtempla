@@ -179,3 +179,39 @@ After the phase: `npm run test:unit` 141/141 (no new unit tests in this
 phase), `npm run test:org-guards` passes, `npm run test:docs-coverage` passes
 (47/47 REST operations, 47/47 MCP tools, 13/13 dashboard surfaces), and
 `npx tsc --noEmit -p .` is clean.
+
+### Phase 5 — 2026-09-29
+
+The dashboard is UI, so the unit gate is the part of it that is pure: the
+threshold notes of the rules editor (spec boundary rows: threshold 0 must
+warn, threshold 1 matches only exactly 1.0), in
+`src/components/youtube/moderation/rule-notes.ts`, tested by
+`scripts/unit/moderation-rule-notes.mjs`.
+
+**Red** (mutation: the threshold-0 branch disabled and the upper bound
+widened to 2): `moderation-rule-notes.mjs` 4 tests, 2 pass, 2 fail. Reverted.
+
+**Red** (`docs-manifest.json` without the `dashboard/youtube/moderation`
+claim, after the tab was added): `npm run test:docs-coverage` exits 1 with
+`uncovered dashboard surfaces: dashboard/youtube/moderation`.
+
+**Green:**
+
+| Check | Result |
+| --- | --- |
+| `npm run test:unit` | 145 / 145 pass |
+| `npm run test:org-guards` | pass (11 mutations: 10 admin, 1 member; 8 queries) |
+| `npm run test:docs-coverage` | 47/47 REST, 47/47 MCP, 14/14 dashboard surfaces |
+| `npx tsc --noEmit -p .` | clean |
+| `npx eslint` on the changed files | clean |
+
+Not verified yet: the tab has not been driven in a browser or against a
+database. That is the next step (verify, with fakes), before the PR merges.
+
+## Status
+
+Done — built in 5 phases on `feat/156-comment-moderation-jev`, 2026-09-29.
+Open for the PR body: the spec corrections from Ray's answers 1, 2 and 4
+(org-less REST key is 401, I1 covers this feature only, examples go in Jev
+`state`); the cron sweep's charges are not in `apiRequestLog` (phase 4 open
+item); Jev pacing is per step, not global (phase 3 tradeoff).
