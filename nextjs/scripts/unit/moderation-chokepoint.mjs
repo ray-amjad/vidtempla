@@ -165,3 +165,19 @@ test("core.ts has no runtime imports (strip-types, and no path to the client)", 
   const runtimeImports = [...core.text.matchAll(/^\s*import\s+(?!type\b)[^;]*?from\s+["'][^"']+["']/gm)];
   assert.deepEqual(runtimeImports.map((m) => m[0]), []);
 });
+
+// ─── Review round 1 #2 ───────────────────────────────────────────────────────
+
+test("R1 #2: bulkUpdateComments phase 0 reconciles only its own update/delete rows, never moderation snapshots", () => {
+  const src = readFileSync(join(root, COMMENT_SERVICE), "utf8");
+  const start = src.indexOf("// ── Phase 0: reconcile stale pending rows");
+  assert.ok(start > 0, "phase 0 marker found");
+  const end = src.indexOf("for (const row of staleRows)", start);
+  assert.ok(end > start, "phase 0 select found");
+  const select = src.slice(start, end).replace(/\s+/g, " ");
+  // Only the verbs reconcileStatus understands: reject/ban (moderation) are
+  // not text edits, and a rejected comment still reads back with its text.
+  assert.match(select, /inArray\(commentEdits\.verb, \[\s*"update", "delete"\s*\]\)/, "verb filter");
+  // Automatic moderation rows (source 'auto') are never billed to a user's batch.
+  assert.match(select, /ne\(commentEdits\.source, "auto"\)/, "source filter");
+});

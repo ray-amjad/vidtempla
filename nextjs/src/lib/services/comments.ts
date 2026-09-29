@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { commentEdits } from "@/db/schema";
 import { getChannelTokens } from "@/lib/api-auth";
@@ -966,7 +966,13 @@ export async function bulkUpdateComments(
           eq(commentEdits.organizationId, ctx.organizationId),
           eq(commentEdits.channelId, channelId),
           eq(commentEdits.status, "pending"),
-          lt(commentEdits.createdAt, new Date(Date.now() - STALE_PENDING_MS))
+          lt(commentEdits.createdAt, new Date(Date.now() - STALE_PENDING_MS)),
+          // Only this service's own rows: reconcileStatus reads text, which
+          // proves nothing for a moderation reject/ban (#156 — a rejected
+          // comment still reads back with its text), and automatic moderation
+          // rows are settled by apply.ts, never billed to a person's batch.
+          inArray(commentEdits.verb, ["update", "delete"]),
+          ne(commentEdits.source, "auto")
         )
       )
       .orderBy(asc(commentEdits.createdAt))

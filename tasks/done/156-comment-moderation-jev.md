@@ -225,3 +225,4 @@ code first, then the fix went in and the whole suite ran green.
 | --- | --- | --- | --- |
 | #1 ledger error read as out of credits | 3 in `scripts/unit/comment-sweep.mjs` (`R1 #1 …`) | 3 / 3 | 3 / 3 |
 | #5 "maybe release" always empty | 2 in `scripts/unit/comment-rules.mjs` (`R1 #5 …`) | 2 / 2 | 2 / 2 |
+| #2 bulk-update phase 0 reconciles moderation snapshots | 1 static check in `scripts/unit/moderation-chokepoint.mjs` (`R1 #2 …`; the logic is a SQL filter in `services/comments.ts`, which the strip-types runner cannot import) | 1 / 1 | 1 / 1 |
