@@ -37,3 +37,34 @@ Issue: https://github.com/ray-amjad/vidtempla/issues/156
 Each test is written first against a stub, run with `npm run test:unit`
 (from `nextjs/`), and the failing counts are recorded here before the
 implementation lands.
+
+### Phase 1 — 2026-09-29
+
+**Red** (stub `core.ts` returning empty/null values, no new tables in `schema.ts`):
+
+| File | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `comment-rules.mjs` | 14 | 4 | 10 |
+| `comment-ingest.mjs` | 16 | 0 | 16 |
+| `comment-schema.mjs` | 11 | 1 | 10 |
+| `npm run test:unit` total | 85 | 49 | 36 |
+
+The 5 stub passes assert "no action" / "empty is accepted" outcomes the stub
+gets right by construction (spam file parses, "Great video!" takes no action,
+an empty rule set is valid, an unknown label is ignored, and the
+table-completeness guard with no new tables yet). Every other new test fails.
+
+**Green** (implementation in `src/lib/moderation/core.ts`, 8 tables in
+`src/db/schema.ts`, migration `drizzle/0024_sleepy_human_torch.sql`):
+
+| File | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `comment-rules.mjs` | 14 | 14 | 0 |
+| `comment-ingest.mjs` | 16 | 16 | 0 |
+| `comment-schema.mjs` | 11 | 11 | 0 |
+| `npm run test:unit` total | 85 | 85 | 0 |
+
+`npm run test:org-guards` and `npx tsc --noEmit -p .` pass.
+
+Note: `spam-comments.txt` holds 2 entries, not the 5 the plan assumed; the
+test asserts at least 2 and runs every entry.

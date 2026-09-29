@@ -169,6 +169,13 @@
       "when": 1786419953645,
       "tag": "0023_thick_ezekiel",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790663806689,
+      "tag": "0024_sleepy_human_torch",
+      "breakpoints": true
     }
   ]
 }
