@@ -213,7 +213,7 @@ const RC_LABELS = ["spam", "self-promotion", "scam", "abusive", "normal"].map((n
  * whatever its state, so the test proves core's own I4 input filter rather
  * than the SQL. `v2` is what the new rubric scores each comment as.
  */
-function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules, outcomeFor } = {}) {
+function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules, outcomeFor, halted = null, enabled = true } = {}) {
   const decided = [];
   let nowMs = Date.parse("2026-09-29T18:00:00Z");
   const events = [];
@@ -259,6 +259,7 @@ function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped =
       },
     },
     store: {
+      getAutomation: async () => ({ enabled, enabledAt: null, cursor: null }),
       getPublishedRubric: async () => ({ version: published, labels: RC_LABELS, instructions: "", examples: [] }),
       getRules: async () =>
         rules ?? [
@@ -289,7 +290,7 @@ function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped =
             (d) => outcomeFor?.(d) ?? { commentId: d.commentId, status: "applied", appliedAction: d.action, youtubeAttempted: true }
           ),
           refused: [],
-          halted: null,
+          halted,
           paused: [],
           youtubeCalls: decisions.length,
         };
@@ -443,7 +444,7 @@ test("R1 #4: reclassify marks a score decided only once its decision was attempt
     v2: { "a-started": SPAMMY, "b-not-started": SPAMMY, "c-clean": CLEAN, "d-held": CLEAN },
     outcomeFor: (d) =>
       d.commentId === "b-not-started"
-        ? { commentId: d.commentId, status: "failed", error: "timeBudget", appliedAction: d.action, youtubeAttempted: false }
+        ? { commentId: d.commentId, status: "failed", error: "timeBudget", appliedAction: d.action, youtubeAttempted: false, retryable: true }
         : undefined,
   });
   await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
@@ -463,4 +464,35 @@ test("R2 #6: reclassify treats a fail-open scoring charge as a ledger error: no 
   assert.equal(r.reason, "credit_ledger_error");
   assert.equal(h.jevCalls.length, 0);
   assert.equal(h.applyCalls.length, 0);
+});
+
+test("R2 #1: reclassify stops on an auth halt and leaves the halted decision owed", async () => {
+  const rows = [rcRow("a", "none"), rcRow("b", "none")];
+  const h = reclassifyHarness({
+    rows,
+    v2: { a: SPAMMY, b: SPAMMY },
+    halted: "auth",
+    outcomeFor: (d) => ({
+      commentId: d.commentId,
+      status: "failed",
+      error: "auth",
+      appliedAction: d.action,
+      youtubeAttempted: d.commentId === "a",
+      retryable: true,
+    }),
+  });
+  const r = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.equal(r.status, "done");
+  assert.equal(r.reason, "youtube_auth");
+  assert.deepEqual(h.decided, [], "neither halted decision is stamped decided");
+});
+
+test("R2 #4: reclassify on a disabled channel ends without scoring, charging or acting", async () => {
+  const h = reclassifyHarness({ rows: [rcRow("a", "none")], v2: { a: SPAMMY }, enabled: false });
+  const r = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.equal(r.status, "done");
+  assert.equal(r.reason, "automation_disabled");
+  assert.equal(h.jevCalls.length, 0);
+  assert.equal(h.applyCalls.length, 0);
+  assert.deepEqual(h.events, []);
 });

@@ -31,6 +31,7 @@ import {
   deleteComment as ytDeleteComment,
   getChannelAccessToken,
   isDefinitiveYouTubeRejection,
+  isYouTubeInvalidGrantError,
   isYouTubeQuotaError,
   isYouTubeRateLimitError,
   setCommentModerationStatus,
@@ -39,7 +40,7 @@ import {
 import { chargeCommentCredits, refundCommentCharge } from "@/lib/services/comments";
 import { isYouTubeQuotaExhausted, markYouTubeQuotaExhausted } from "@/lib/services/quota-guard";
 import { youTubeErrorDetail } from "@/lib/youtube-errors";
-import { applyDecisions } from "./core";
+import { applyDecisions, moderationErrorClass } from "./core";
 import type {
   ApplyDeps,
   ApplyOutcome,
@@ -219,10 +220,13 @@ function moderationDeps(channel: ChannelRef): ApplyDeps {
         upstreamStatus: detail.upstreamStatus,
         reasons: detail.reasons,
       });
-      return {
+      return moderationErrorClass({
         definitive: isDefinitiveYouTubeRejection(err),
-        halt: isYouTubeQuotaError(err) ? "quota" : isYouTubeRateLimitError(err) ? "rateLimit" : null,
-      };
+        quota: isYouTubeQuotaError(err),
+        rateLimit: isYouTubeRateLimitError(err),
+        // A 401 means the channel's token was refused: every later call fails too.
+        unauthorized: detail.upstreamStatus === 401 || isYouTubeInvalidGrantError(err),
+      });
     },
   };
 }
@@ -333,6 +337,20 @@ const drizzleStore: ModerationStore = {
       .from(commentAutomation)
       .where(eq(commentAutomation.youtubeChannelId, youtubeChannelId));
     return { rejectBan: row?.rejectBan ?? false, delete: row?.delete ?? false };
+  },
+
+  async isAutomationEnabled(youtubeChannelId) {
+    try {
+      const [row] = await db
+        .select({ enabled: commentAutomation.enabled })
+        .from(commentAutomation)
+        .where(eq(commentAutomation.youtubeChannelId, youtubeChannelId));
+      return row?.enabled ?? false;
+    } catch (err) {
+      // Cannot tell whether the owner switched it off: act on nothing.
+      console.error("moderation: could not read comment_automation.enabled", err);
+      return false;
+    }
   },
 
   async setPaused(youtubeChannelId, capClass: CapClass) {

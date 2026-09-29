@@ -10,6 +10,9 @@
  * - The sweep started by `setChannelAutomation` and the reclassify started by
  *   `publishRubric` start only when VERCEL_ENV === "production"; the
  *   chokepoint's own production gate is the backstop.
+ * - Reclassify runs only while automation is enabled. A rubric published on a
+ *   disabled channel is reclassified when the owner turns automation back on
+ *   (`setChannelAutomation` starts it for the published version).
  */
 
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
@@ -219,6 +222,16 @@ export async function setChannelAutomation(
     } catch (err) {
       // The 15-minute cron picks the channel up anyway.
       console.error("moderation: could not start the first sweep", err instanceof Error ? err.name : "unknown");
+    }
+    // A rubric published while automation was off never reclassified the
+    // stored comments. Reclassify only takes comments with no score for this
+    // version, so a version already reclassified costs one empty page.
+    if (published && !result.seededRubric) {
+      try {
+        await start(commentReclassifyWorkflow, [channel.id, published.version]);
+      } catch (err) {
+        console.error("moderation: could not start reclassify", err instanceof Error ? err.name : "unknown");
+      }
     }
   }
 
@@ -518,8 +531,14 @@ export async function publishRubric(
   });
   if ("error" in outcome) return outcome;
 
+  // Reclassify is automatic moderation: not on a disabled channel. Turning
+  // automation on starts it for the published version (setChannelAutomation).
+  const [automation] = await db
+    .select({ enabled: commentAutomation.enabled })
+    .from(commentAutomation)
+    .where(eq(commentAutomation.youtubeChannelId, channel.id));
   let reclassifyStarted = false;
-  if (isProduction()) {
+  if (automation?.enabled && isProduction()) {
     try {
       await start(commentReclassifyWorkflow, [channel.id, outcome.version]);
       reclassifyStarted = true;

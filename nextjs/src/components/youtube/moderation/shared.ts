@@ -94,10 +94,11 @@ export const HALT_LABELS: Record<string, string> = {
   quota: 'The YouTube daily quota ran out. It resets at midnight Pacific.',
   quotaBreaker: 'The YouTube quota breaker is tripped. It resets at midnight Pacific.',
   rateLimit: 'YouTube throttled the request. Try again in about a minute.',
-  auth: 'The channel token could not be read. Reconnect the channel.',
+  auth: 'YouTube refused the channel token, or it could not be read. Reconnect the channel.',
   credits: 'This workspace ran out of credits.',
   ledger: 'Credits could not be checked (a temporary error). Nothing more was charged; try again in a moment.',
   timeBudget: 'The request ran out of time. Send the rest again.',
+  disabled: 'Automatic moderation is off for this channel.',
 };
 
 export function percent(p: number | null | undefined): string {

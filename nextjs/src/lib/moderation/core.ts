@@ -65,6 +65,7 @@ import type {
   SweepStatus,
   SweepStore,
   UndecidedScore,
+  YouTubeErrorClass,
 } from "./types";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -481,6 +482,38 @@ export function isUnmetered(charge: CreditCharge, amount: number): boolean {
   return charge.outcome === "ok" && charge.refundable < amount;
 }
 
+/**
+ * How a thrown YouTube moderation error is treated. A 4xx is definitive (the
+ * write did not take effect). The daily quota, a rate limit and a refused
+ * token (401, or a token that cannot be refreshed) halt the whole call.
+ */
+export function moderationErrorClass(signals: {
+  definitive: boolean;
+  quota: boolean;
+  rateLimit: boolean;
+  unauthorized: boolean;
+}): YouTubeErrorClass {
+  const halt = signals.quota ? "quota" : signals.rateLimit ? "rateLimit" : signals.unauthorized ? "auth" : null;
+  return { definitive: signals.definitive, halt };
+}
+
+/**
+ * Failures that say nothing about the comment itself: every halt reason, and
+ * a snapshot row that could not be written. A decision stopped by one of them
+ * (with nothing landed) is `retryable`.
+ */
+const RETRYABLE_ERRORS: ReadonlySet<string> = new Set<ApplyHaltReason | "snapshot_failed">([
+  "quota",
+  "quotaBreaker",
+  "rateLimit",
+  "auth",
+  "credits",
+  "ledger",
+  "timeBudget",
+  "disabled",
+  "snapshot_failed",
+]);
+
 /** The capped class of an action, or null (hold, flag and release are uncapped). */
 function capClassOf(action: RequestedAction): CapClass | null {
   if (action === "reject" || action === "ban") return "rejectBan";
@@ -568,6 +601,9 @@ type YouTubeOp = "hold" | "reject" | "ban" | "release" | "delete";
  *    and a release that is automatic or of a comment that is not held.
  * 2. **Collapse** several decisions for one comment to the most severe (I3).
  *    A ban of a comment with no author channel degrades to reject.
+ * 2b. **Disabled**: when the actor is automatic and the owner has switched
+ *    automation off, nothing is done — no flag, no charge, no call — and the
+ *    call halts `disabled` (every decision stays retryable).
  * 3. **Flag** is database-only: applied at once, no YouTube call, no credits.
  * 4. **Production gate**: an automatic actor outside production records every
  *    other decision as `skipped_non_production` — no YouTube call, no
@@ -658,6 +694,9 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
     editId: it.editId,
     creditsCharged: it.charge && it.status !== "skipped_non_production" ? it.charge.refundable : 0,
     youtubeAttempted: it.attempts > 0,
+    // Nothing landed (every attempt, if any, was a 4xx) and the reason was a
+    // halt, not the comment: the automatic caller may decide it again later.
+    retryable: it.status === "failed" && it.allDefinitive && it.error !== null && RETRYABLE_ERRORS.has(it.error),
   });
 
   /** Hands finished items to the store (action log + moderation_state). */
@@ -669,6 +708,19 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
     result.outcomes.push(...outcomes);
     await deps.store.recordOutcomes(channel, actor, outcomes, deps.clock.now());
   };
+
+  // ── 2b. Automation switched off (automatic only) ──
+  // The owner may disable automation while a sweep step runs; from then on
+  // the automatic actor acts on nothing, not even a database-only flag.
+  if (automatic && !(await deps.store.isAutomationEnabled(channel.id))) {
+    result.halted = "disabled";
+    for (const it of items) {
+      it.status = "failed";
+      it.error = "disabled";
+    }
+    await record(items);
+    return result;
+  }
 
   // ── 3. Flags: database only ──
   const flags = items.filter((it) => it.applied === "flag");
@@ -1210,17 +1262,32 @@ function scoreRow(comment: ScoringComment, result: JevChoiceResult, rubricVersio
   };
 }
 
+/** A chokepoint halt that ends the whole sweep or reclassify run. */
+type RunHalt = "credits" | "ledger" | "quota" | "auth" | "rateLimit" | "disabled";
+
+const RUN_HALT: Record<ApplyHaltReason, RunHalt | null> = {
+  quota: "quota",
+  quotaBreaker: "quota",
+  rateLimit: "rateLimit",
+  auth: "auth",
+  credits: "credits",
+  ledger: "ledger",
+  disabled: "disabled",
+  // The time budget only ends this step's YouTube calls; its decisions stay owed.
+  timeBudget: null,
+};
+
 /** What the chokepoint did with one step's matches. */
 interface MatchesApplied {
   applied: number;
-  halt: "credits" | "ledger" | "quota" | null;
+  halt: RunHalt | null;
   /**
-   * Comment ids whose decision never started: halted before its YouTube call
-   * (time budget, credits, ledger, breaker, a snapshot failure), or the whole
-   * chokepoint threw. Their scores stay owed a decision, so the next sweep
-   * takes them up again (`sweepDecideBacklog`).
+   * Comment ids whose decision is still owed: the chokepoint reported it
+   * `retryable` (a halt, the time budget or disabled automation stopped it
+   * with nothing landed), or the whole chokepoint threw. Their scores are not
+   * stamped decided, so the next sweep takes them up (`sweepDecideBacklog`).
    */
-  notStarted: Set<string>;
+  owed: Set<string>;
 }
 
 /** Hands matches to the chokepoint; maps its halt onto a stopping rule. */
@@ -1230,7 +1297,7 @@ async function applyMatches(
   decisions: SweepDecision[],
   deadlineMs: number
 ): Promise<MatchesApplied> {
-  if (decisions.length === 0) return { applied: 0, halt: null, notStarted: new Set() };
+  if (decisions.length === 0) return { applied: 0, halt: null, owed: new Set() };
   let result: ApplyResult;
   try {
     result = await apply.apply(channel, decisions, { deadlineMs });
@@ -1238,40 +1305,27 @@ async function applyMatches(
     // Nothing is known to have started, so every decision stays owed. A retry
     // is safe for I4: the chokepoint re-reads moderation_state, and
     // listUndecided skips a comment with an applied or unknown log row.
-    return { applied: 0, halt: null, notStarted: new Set(decisions.map((d) => d.commentId)) };
+    return { applied: 0, halt: null, owed: new Set(decisions.map((d) => d.commentId)) };
   }
-  // Settled: refused (final), or an outcome other than "failed before any
-  // YouTube call". An attempted write may have landed, so it is never redone.
-  const started = new Set<string>();
-  for (const r of result.refused) started.add(r.commentId);
-  for (const o of result.outcomes) {
-    if (!(o.status === "failed" && !o.youtubeAttempted)) started.add(o.commentId);
-  }
-  const notStarted = new Set(decisions.map((d) => d.commentId).filter((id) => !started.has(id)));
+  // Everything else is settled: refused (final), applied, refused by YouTube,
+  // or possibly landed — an attempted write is never redone.
+  const owed = new Set(result.outcomes.filter((o) => o.retryable).map((o) => o.commentId));
   const applied = result.outcomes.filter((o) => o.status === "applied").length;
-  const halt =
-    result.halted === "credits"
-      ? "credits"
-      : result.halted === "ledger"
-        ? "ledger"
-        : result.halted === "quota" || result.halted === "quotaBreaker"
-        ? "quota"
-        : null;
-  return { applied, halt, notStarted };
+  return { applied, halt: result.halted ? RUN_HALT[result.halted] : null, owed };
 }
 
 /**
  * Stamps `decided_at` on the scores whose decision is taken: every evaluated
- * comment except those whose decision never started (see MatchesApplied).
+ * comment except those whose decision is still owed (see MatchesApplied).
  */
 async function markSettled(
   store: Pick<SweepStore, "markDecided">,
   channel: ChannelRef,
   version: number,
   evaluated: readonly UndecidedScore[],
-  notStarted: ReadonlySet<string>
+  owed: ReadonlySet<string>
 ): Promise<void> {
-  const ids = evaluated.map((e) => e.comment.id).filter((id) => !notStarted.has(id));
+  const ids = evaluated.map((e) => e.comment.id).filter((id) => !owed.has(id));
   if (ids.length > 0) await store.markDecided(channel.id, ids, version);
 }
 
@@ -1415,6 +1469,28 @@ function stepEnd(deps: SweepDeps, channel: ChannelRef, counts: ScoringCounts) {
   };
 }
 
+/**
+ * How a chokepoint halt ends a sweep step. Credits and quota drop the window
+ * (spec stopping rules); a ledger error, a refused token, a rate limit and
+ * disabled automation keep it — the pending comments and owed decisions wait.
+ */
+function endOnHalt(end: ReturnType<typeof stepEnd>, halt: RunHalt): Promise<SweepChunkResult> {
+  switch (halt) {
+    case "credits":
+      return end("skipped: out of credits", "insufficient_credits", true);
+    case "quota":
+      return end("skipped: quota breaker", "quota", true);
+    case "ledger":
+      return end("done", "credit_ledger_error", false);
+    case "auth":
+      return end("skipped: youtube error", "youtube_auth", false);
+    case "rateLimit":
+      return end("skipped: youtube error", "youtube_rate_limited", false);
+    case "disabled":
+      return end("skipped: disabled", null, false);
+  }
+}
+
 /** Owed decisions one sweep takes up at most, in its decision step. */
 export const DECISION_BACKLOG_LIMIT = 100;
 
@@ -1425,9 +1501,11 @@ export const DECISION_BACKLOG_LIMIT = 100;
  * null `decided_at`. This step re-evaluates up to DECISION_BACKLOG_LIMIT of
  * them with the current rules (no Jev call, no scoring credit) and hands the
  * matches to the chokepoint, which re-checks I4 on the current state and
- * charges and caps as usual. Quota and ledger halts stop the run as in
+ * charges and caps as usual. Every other halt stops the run as in
  * `sweepScoreChunk`; a credit halt only ends this step (the owed decisions
  * wait), so a balance that still covers 1-credit scores is not wasted.
+ * A channel whose automation was switched off since ingest ends
+ * `skipped: disabled` before anything is read or charged.
  */
 export async function sweepDecideBacklog(deps: SweepDeps, channel: ChannelRef): Promise<SweepChunkResult> {
   const t = tuning(deps);
@@ -1435,6 +1513,7 @@ export async function sweepDecideBacklog(deps: SweepDeps, channel: ChannelRef): 
   const counts = zeroCounts();
   const end = stepEnd(deps, channel, counts);
 
+  if (!(await deps.store.getAutomation(channel.id))?.enabled) return end("skipped: disabled", null, false);
   if (!channel.organizationId) return end("skipped: disabled", "no_organization", false);
   const rubric = await deps.store.getPublishedRubric(channel.id);
   if (!rubric) return end("skipped: no published rubric", null, false);
@@ -1447,14 +1526,14 @@ export async function sweepDecideBacklog(deps: SweepDeps, channel: ChannelRef): 
   counts.decisions = decisions.length;
   const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
   counts.applied = applied.applied;
-  await markSettled(deps.store, channel, rubric.version, owed, applied.notStarted);
+  await markSettled(deps.store, channel, rubric.version, owed, applied.owed);
 
-  if (applied.halt === "quota") return end("skipped: quota breaker", "quota", true);
-  if (applied.halt === "ledger") return end("done", "credit_ledger_error", false);
   // A balance too small for a 50-credit action may still pay for 1-credit
   // scores: the owed decisions wait, and the scoring steps apply the usual
   // out-of-credits rule to their own charges.
-  return { status: "continue", reason: applied.halt === "credits" ? "insufficient_credits" : null, ...counts };
+  if (applied.halt === "credits") return { status: "continue", reason: "insufficient_credits", ...counts };
+  if (applied.halt) return endOnHalt(end, applied.halt);
+  return { status: "continue", reason: null, ...counts };
 }
 
 /**
@@ -1470,6 +1549,9 @@ export async function sweepDecideBacklog(deps: SweepDeps, channel: ChannelRef): 
  * - Out of credits (scoring or the chokepoint) or the quota breaker ends
  *   the run: the rest of the pending comments are dropped to `unscored` and
  *   the cursor moves to now (missed windows are dropped).
+ * - A ledger error, a refused token (auth), a rate limit, or automation
+ *   switched off (before the claim, or seen by the chokepoint) ends the run
+ *   and keeps the window: the rest stay pending, halted decisions stay owed.
  * - Nothing left to claim ends the run `done`.
  */
 export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Promise<SweepChunkResult> {
@@ -1478,6 +1560,7 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
   const counts = zeroCounts();
   const end = stepEnd(deps, channel, counts);
 
+  if (!(await deps.store.getAutomation(channel.id))?.enabled) return end("skipped: disabled", null, false);
   const organizationId = channel.organizationId;
   if (!organizationId) return end("skipped: disabled", "no_organization", false);
   const rubric = await deps.store.getPublishedRubric(channel.id);
@@ -1514,15 +1597,13 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
   counts.decisions = decisions.length;
   const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
   counts.applied = applied.applied;
-  await markSettled(deps.store, channel, rubric.version, evaluated, applied.notStarted);
+  await markSettled(deps.store, channel, rubric.version, evaluated, applied.owed);
 
-  if (batch.stop === "credits" || applied.halt === "credits") {
-    return end("skipped: out of credits", "insufficient_credits", true);
-  }
-  if (applied.halt === "quota") return end("skipped: quota breaker", "quota", true);
+  if (batch.stop === "credits") return endOnHalt(end, "credits");
+  if (applied.halt) return endOnHalt(end, applied.halt);
   // The credit ledger failed (a DB error, not an empty balance): stop, keep
   // the window. Unstarted claims went back to pending above.
-  if (batch.stop === "ledger" || applied.halt === "ledger") return end("done", "credit_ledger_error", false);
+  if (batch.stop === "ledger") return endOnHalt(end, "ledger");
   // Jev is unusable (no key / bad key): stop calling it; the comments wait, pending.
   if (batch.stop === "jev") return end("done", "jev_unavailable", false);
   return { status: "continue", reason: null, ...counts };
@@ -1577,6 +1658,8 @@ export async function sweepChannel(
  * matches to the chokepoint.
  *
  * - `superseded`: `version` is no longer the published one; nothing is called.
+ * - `done` / `automation_disabled`: automation is off for the channel; nothing
+ *   is scored, charged or acted on (the chokepoint re-checks before acting).
  * - `quota breaker` / `out of credits`: checked before any call, and after
  *   the chokepoint halts on them.
  * - I4: only never-actioned comments (none, flagged) get a decision; a held
@@ -1606,6 +1689,7 @@ export async function reclassifyChunk(
 
   const published = await deps.store.getPublishedRubric(channel.id);
   if (!published || published.version !== version) return result("superseded", null, afterId);
+  if (!(await deps.store.getAutomation(channel.id))?.enabled) return result("done", "automation_disabled", afterId);
   const organizationId = channel.organizationId;
   if (!organizationId) return result("out of credits", "no_organization", afterId);
   if (await deps.quota.isTripped()) return result("quota breaker", null, afterId);
@@ -1639,7 +1723,7 @@ export async function reclassifyChunk(
   counts.applied = applied.applied;
   // A decision that never started stays owed; the sweep's decision step
   // takes it up while this version is the published one.
-  await markSettled(deps.store, channel, version, evaluated, applied.notStarted);
+  await markSettled(deps.store, channel, version, evaluated, applied.owed);
 
   if (batch.stop === "credits" || applied.halt === "credits") {
     return result("out of credits", null, nextAfterId, maybeRelease);
@@ -1648,6 +1732,9 @@ export async function reclassifyChunk(
   if (batch.stop === "ledger" || applied.halt === "ledger") {
     return result("done", "credit_ledger_error", nextAfterId, maybeRelease);
   }
+  if (applied.halt === "auth") return result("done", "youtube_auth", nextAfterId, maybeRelease);
+  if (applied.halt === "rateLimit") return result("done", "youtube_rate_limited", nextAfterId, maybeRelease);
+  if (applied.halt === "disabled") return result("done", "automation_disabled", nextAfterId, maybeRelease);
   if (batch.stop === "jev") return result("done", "jev_unavailable", nextAfterId, maybeRelease);
   return result("continue", null, nextAfterId, maybeRelease);
 }

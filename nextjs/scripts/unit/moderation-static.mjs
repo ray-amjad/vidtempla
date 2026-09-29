@@ -39,3 +39,17 @@ test("R2 #2: removing an accepted, unpublished example from the draft records it
   assert.match(body, /eq\(commentRubricExamples\.status, "accepted"\)/, "only accepted ones");
   assert.match(body, /isNull\(commentRubricExamples\.includedInVersion\)/, "only unpublished ones");
 });
+
+test("R2 #4: publishRubric starts reclassify only when automation is enabled; enabling starts it for the published version", () => {
+  const publish = fnBody(read("src/lib/moderation/service.ts"), "publishRubric");
+  assert.match(publish, /select\(\{ enabled: commentAutomation\.enabled \}\)/, "publishRubric reads enabled");
+  assert.match(publish, /if \(automation\?\.enabled && isProduction\(\)\) \{ try \{ await start\(commentReclassifyWorkflow/, "reclassify gated on enabled");
+  const enable = fnBody(read("src/lib/moderation/service.ts"), "setChannelAutomation");
+  assert.match(enable, /if \(published && !result\.seededRubric\) \{ try \{ await start\(commentReclassifyWorkflow, \[channel\.id, published\.version\]\)/, "enable starts reclassify");
+});
+
+test("R2 #1/#4 (adapter): a 401 is an auth halt, and the chokepoint store reads enabled and fails closed", () => {
+  const apply = read("src/lib/moderation/apply.ts").replace(/\s+/g, " ");
+  assert.match(apply, /unauthorized: detail\.upstreamStatus === 401 \|\| isYouTubeInvalidGrantError\(err\)/, "401 -> auth");
+  assert.match(apply, /async isAutomationEnabled\(youtubeChannelId\) \{ try \{ .*?return row\?\.enabled \?\? false; \} catch \(err\) \{ .*?return false; \}/, "fails closed");
+});

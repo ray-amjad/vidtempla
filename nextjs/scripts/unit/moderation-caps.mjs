@@ -119,6 +119,9 @@ function harness(opts = {}) {
       async getPauseFlags() {
         return { ...paused };
       },
+      async isAutomationEnabled() {
+        return opts.enabled ?? true;
+      },
       async setPaused(ch, capClass) {
         paused[capClass] = true;
         events.push({ type: "pause", capClass });
@@ -561,4 +564,37 @@ test("R2 #6: a manual dashboard action keeps the fail-open behaviour of the exis
   assert.equal(r.halted, null);
   assert.equal(h.yt().length, 1);
   assert.equal(r.outcomes[0].status, "applied");
+});
+
+test("R2 #4: the automatic actor on a disabled channel acts on nothing — no flag, no charge, no YouTube call", async () => {
+  const h = harness({ enabled: false });
+  const r = await run(h, AUTO, [...decisions("flag", 1, 1), ...decisions("delete", 2, 1)]);
+  assert.equal(r.halted, "disabled");
+  assert.equal(h.yt().length, 0);
+  assert.equal(h.events.filter((e) => e.type === "charge" || e.type === "reserve" || e.type === "snapshot").length, 0);
+  assert.equal(r.outcomes.filter((o) => o.status === "applied").length, 0);
+  for (const o of r.outcomes) assert.equal(o.retryable, true, "the decision stays owed");
+});
+
+test("R2 #4: a person's dashboard action does not depend on automation being enabled", async () => {
+  const h = harness({ enabled: false });
+  const r = await run(h, HUMAN, decisions("hold", 1, 1));
+  assert.equal(r.halted, null);
+  assert.equal(h.yt().length, 1);
+});
+
+test("R2 #1: a halt marks the decisions it stopped as retryable; an attempt that may have landed is not", async () => {
+  // Delete 1: 5xx (ambiguous, may have landed). Delete 2: 429 halt. Delete 3: never sent.
+  let n = 0;
+  const h = harness({
+    failDelete: () => (++n === 1 ? ytError(503) : n === 2 ? ytError(429, { rateLimit: true }) : null),
+  });
+  const r = await run(h, AUTO, decisions("delete", 1, 3));
+  assert.equal(r.halted, "rateLimit");
+  const by = Object.fromEntries(r.outcomes.map((o) => [o.commentId, o]));
+  assert.equal(by["c-1"].status, "unknown");
+  assert.equal(by["c-1"].retryable, false);
+  assert.equal(by["c-2"].error, "rateLimit");
+  assert.equal(by["c-2"].retryable, true, "a definitive 429: nothing landed, take it up later");
+  assert.equal(by["c-3"].retryable, true, "never sent");
 });

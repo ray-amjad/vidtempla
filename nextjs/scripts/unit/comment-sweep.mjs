@@ -9,6 +9,7 @@ import test from "node:test";
 
 const {
   applyDecisions,
+  moderationErrorClass,
   dryRun,
   sweepBegin,
   sweepChannel,
@@ -310,7 +311,8 @@ function harness(opts = {}) {
     async deleteComment(...args) {
       ytWrites.push({ fn: "deleteComment", args });
       events.push({ type: "youtube", fn: "deleteComment" });
-      if (opts.ytDeleteError) throw opts.ytDeleteError();
+      const deleteError = opts.ytDeleteError?.();
+      if (deleteError) throw deleteError;
     },
   };
   const counters = { rejectBan: 0, delete: 0 };
@@ -333,6 +335,9 @@ function harness(opts = {}) {
     store: {
       async getPauseFlags() {
         return { rejectBan: false, delete: false };
+      },
+      async isAutomationEnabled() {
+        return automation?.enabled ?? false;
       },
       async setPaused() {},
       async insertSnapshot(row) {
@@ -1206,4 +1211,89 @@ test("R2 #7: when the relisting itself fails, the old cursor stays and the token
   assert.equal(out.status, "skipped: youtube error");
   assert.equal(h.automation.cursor.getTime(), ENABLED_AT.getTime(), "not jumped to the resume's newest");
   assert.equal(h.automation.listingPageToken, null);
+});
+
+for (const [halt, reason] of [["rateLimit", "youtube_rate_limited"], ["auth", "youtube_auth"]]) {
+  test(`R2 #1: a ${halt} halt on an action stops the run; its decision stays owed and the next sweep applies it`, async () => {
+    const spam = "Read AI Millionaire FastScale by Mark Voss";
+    let failures = 1;
+    const h = harness({
+      tuning: { chunkSize: 1 },
+      pages: [
+        [
+          thread({ id: "yt-spam", text: spam, minutesAfter: 31 }),
+          thread({ id: "yt-b", text: "second", minutesAfter: 32 }),
+          thread({ id: "yt-c", text: "third", minutesAfter: 33 }),
+        ],
+      ],
+      ytDeleteError: () => (failures-- > 0 ? Object.assign(new Error("youtube"), { halt }) : null),
+      classifyError: (err) => ({ definitive: true, halt: err?.halt ?? null }),
+    });
+    const out = await sweepChannel(h.deps, CHANNEL);
+    assert.equal(out.status, "skipped: youtube error");
+    assert.equal(out.reason, reason);
+    assert.equal(h.jevRequests.length, 1, "no more scoring after the halt");
+    assert.equal(h.byText("second").scoreStatus, "pending", "the rest wait, not dropped");
+    assert.ok(h.automation.cursor.getTime() < START.getTime(), "the window is kept");
+    assert.equal(h.byText(spam).moderationState, "none");
+
+    h.setPages([[]]);
+    await sweepChannel(h.deps, CHANNEL);
+    assert.equal(h.byText(spam).moderationState, "deleted", "the owed decision is taken up again");
+    assert.equal(h.ytWrites.filter((w) => w.fn === "deleteComment").length, 2);
+  });
+}
+
+test("R2 #1: a YouTube 401 on a moderation write is an auth halt", () => {
+  assert.deepEqual(moderationErrorClass({ definitive: true, quota: false, rateLimit: false, unauthorized: true }), {
+    definitive: true,
+    halt: "auth",
+  });
+  assert.equal(moderationErrorClass({ definitive: true, quota: true, rateLimit: false, unauthorized: false }).halt, "quota");
+  assert.equal(moderationErrorClass({ definitive: true, quota: false, rateLimit: true, unauthorized: false }).halt, "rateLimit");
+  assert.equal(moderationErrorClass({ definitive: true, quota: false, rateLimit: false, unauthorized: false }).halt, null);
+  assert.equal(moderationErrorClass({ definitive: false, quota: false, rateLimit: false, unauthorized: false }).definitive, false);
+});
+
+test("R2 #4: a channel disabled after ingest: the scoring step ends `skipped: disabled` without claiming or charging", async () => {
+  const h = harness({ pages: [[thread({ id: "yt-a", text: "Great video!", minutesAfter: 31 })]] });
+  assert.equal((await sweepBegin(h.deps, CHANNEL)).status, "continue");
+  h.automation.enabled = false;
+  const res = await sweepScoreChunk(h.deps, CHANNEL);
+  assert.equal(res.status, "skipped: disabled");
+  assert.deepEqual(charges(h), []);
+  assert.equal(h.jevRequests.length, 0);
+  assert.equal(h.byText("Great video!").scoreStatus, "pending");
+});
+
+test("R2 #4: a disabled channel's owed decisions are not taken up", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({ pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]], tuning: { stepBudgetMs: 10_000 } });
+  await sweepChannel(h.deps, CHANNEL);
+  h.deps.tuning = {};
+  h.automation.enabled = false;
+  const calls = h.applyCalls.length;
+  const res = await sweepDecideBacklog(h.deps, CHANNEL);
+  assert.equal(res.status, "skipped: disabled");
+  assert.equal(h.applyCalls.length, calls, "the chokepoint is not called");
+  assert.equal(h.byText(spam).moderationState, "none");
+});
+
+test("R2 #4: disabled while a chunk scores: the chokepoint acts on nothing and the decision stays owed", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  let ref = null;
+  const h = harness({
+    pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]],
+    jev: (req) => {
+      ref.automation.enabled = false; // the owner turns it off mid-step
+      return defaultJev(req);
+    },
+  });
+  ref = h;
+  const out = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(out.status, "skipped: disabled");
+  assert.equal(h.ytWrites.length, 0);
+  assert.deepEqual(charges(h), [SCORE_CREDITS], "no action charge");
+  assert.equal(h.byText(spam).moderationState, "none");
+  assert.equal(h.scores[0].decidedAt, undefined, "owed, not stamped decided");
 });

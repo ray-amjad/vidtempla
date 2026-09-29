@@ -263,6 +263,8 @@ export type DegradedReason =
  * - `ledger`: the credit ledger itself failed (a database error). Not "out
  *   of credits": callers keep their window and try again later.
  * - `timeBudget`: the next call could not finish inside the deadline.
+ * - `disabled`: automation is off for the channel (automatic actor only);
+ *   nothing is done, not even a flag.
  */
 export type ApplyHaltReason =
   | "quota"
@@ -271,7 +273,8 @@ export type ApplyHaltReason =
   | "auth"
   | "credits"
   | "ledger"
-  | "timeBudget";
+  | "timeBudget"
+  | "disabled";
 
 export interface ApplyOutcome {
   /** youtube_comments.id */
@@ -295,6 +298,13 @@ export interface ApplyOutcome {
    * flags, the production gate, and anything halted before its call.
    */
   youtubeAttempted: boolean;
+  /**
+   * Nothing reached YouTube for this comment, and what stopped it was outside
+   * the comment (a halt, the time budget, disabled automation, a snapshot
+   * write): an automatic caller keeps the decision owed and takes it up
+   * again. False for anything applied, refused by YouTube, or possibly landed.
+   */
+  retryable: boolean;
 }
 
 export interface ApplyRefusal {
@@ -598,7 +608,7 @@ export type ReclassifyDeps = ScoringDeps & {
   creditBalance(organizationId: string): Promise<number | null>;
   quota: QuotaBreaker;
   apply: ApplyPort;
-  store: Pick<SweepStore, "getPublishedRubric" | "getRules" | "listForReclassify" | "saveScore" | "markDecided">;
+  store: Pick<SweepStore, "getAutomation" | "getPublishedRubric" | "getRules" | "listForReclassify" | "saveScore" | "markDecided">;
 };
 
 export type DryRunDeps = ScoringDeps & {
@@ -721,6 +731,8 @@ export interface ModerationCounters {
 export interface ModerationStore {
   /** The I2 pause flags on comment_automation (false when there is no row). */
   getPauseFlags(youtubeChannelId: string): Promise<Record<CapClass, boolean>>;
+  /** comment_automation.enabled right now (false when there is no row or it cannot be read). */
+  isAutomationEnabled(youtubeChannelId: string): Promise<boolean>;
   setPaused(youtubeChannelId: string, capClass: CapClass): Promise<void>;
   /** Inserts a `pending` comment_edits row; returns its id. Throws on failure. */
   insertSnapshot(row: SnapshotInsert): Promise<string>;
