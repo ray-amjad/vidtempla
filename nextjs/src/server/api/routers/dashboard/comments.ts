@@ -51,7 +51,7 @@ type ServiceError = Extract<ServiceResult<unknown>, { error: unknown }>["error"]
  * tripped YouTube quota breaker surfaces. The `suggestion` is appended because
  * it is the only self-correcting instruction the user gets in a toast.
  */
-function throwCommentServiceError(error: ServiceError): never {
+export function throwCommentServiceError(error: ServiceError): never {
   const code =
     error.status === 404
       ? "NOT_FOUND"

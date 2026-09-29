@@ -355,6 +355,57 @@ components:
           type: string
           format: date-time
 
+    CommentClassification:
+      type: object
+      description: A stored viewer comment and its moderation score for the channel's published rubric (issue #156).
+      properties:
+        commentId:
+          type: string
+          description: YouTube comment ID
+        parentId:
+          type: string
+          nullable: true
+          description: Top-level comment ID when this comment is a reply
+        videoId:
+          type: string
+        authorChannelId:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          format: date-time
+        moderationState:
+          type: string
+          enum: [none, flagged, held, rejected, banned, deleted, released]
+          description: The last moderation action VidTempla applied, automatic or manual
+        scoreStatus:
+          type: string
+          enum: [pending, scoring, scored, unscored]
+          description: unscored means the Jev call failed; such a comment is never retried or acted on
+        label:
+          type: string
+          nullable: true
+          description: Winning label of the published rubric, e.g. spam, self-promotion, scam, abusive, normal
+          example: spam
+        probabilities:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: number
+          description: Per-label probability (0 to 1)
+          example: { spam: 0.96, normal: 0.02, self-promotion: 0.01, scam: 0.01, abusive: 0 }
+        confidence:
+          type: number
+          nullable: true
+        rubricVersion:
+          type: integer
+          nullable: true
+          description: The published rubric version that produced this score
+        model:
+          type: string
+          nullable: true
+          description: Resolved Jev model string returned with the score
+
   responses:
     Unauthorized:
       description: Missing or invalid API key
@@ -2883,8 +2934,14 @@ paths:
       summary: List the comment edit log
       description: |
         Returns every comment update and deletion made through VidTempla for this
-        workspace, newest first. Each row holds the comment's text as it was before the
-        write — the only surviving copy, because YouTube keeps no comment history.
+        workspace, newest first, plus every reject and ban made by comment moderation.
+        Each row holds the comment's text as it was before the write — the only
+        surviving copy, because YouTube keeps no comment history.
+
+        `source: "auto"` rows come from automatic comment moderation and carry no
+        acting user. A moderation row's `beforeText` is the text VidTempla stored and
+        scored, which is the text that was acted on. A hold is reversible and writes
+        no row.
 
         Only rows with `textSource: "original"` hold restorable text. A `"display"` row
         is the HTML-marked-up rendering of a third-party comment and is an audit record
@@ -2949,7 +3006,8 @@ paths:
                           nullable: true
                         verb:
                           type: string
-                          enum: [update, delete]
+                          enum: [update, delete, reject, ban]
+                          description: reject and ban come from comment moderation; ban also bans the author
                         textSource:
                           type: string
                           enum: [original, display]
@@ -2965,7 +3023,8 @@ paths:
                           enum: [pending, applied, failed, unknown]
                         source:
                           type: string
-                          enum: [mcp, rest, dashboard]
+                          enum: [mcp, rest, dashboard, auto]
+                          description: auto is automatic comment moderation, with no acting user
                         createdAt:
                           type: string
                           format: date-time
@@ -2987,6 +3046,116 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /youtube/comments/classifications:
+    get:
+      operationId: listCommentClassifications
+      summary: List stored comment moderation scores
+      description: |
+        Returns the stored moderation scores for one channel's viewer comments, newest
+        comment first. VidTempla stores and scores comments only for channels with
+        automatic comment moderation enabled in the dashboard, and only comments posted
+        after it was enabled.
+
+        Each item carries the winning label of the channel's published rubric, the
+        per-label probabilities, the resolved Jev model string, and the comment's current
+        moderation state. `label`, `probabilities`, `confidence`, `rubricVersion` and
+        `model` are null until the comment is scored with the published rubric (for
+        example while `scoreStatus` is `pending`, after a Jev failure left it `unscored`,
+        or before a newly published rubric has re-scored it).
+
+        Comment text is not returned; read it with `GET /youtube/comments/{id}` or
+        `GET /youtube/comments`. This endpoint is read-only: rules, rubrics and
+        moderation actions are managed in the dashboard. Any key tier may call it.
+
+        A key that is not organization-scoped is refused with `401 API_KEY_REISSUE_REQUIRED`.
+        A channel that is not connected to the key's organization returns 404.
+
+        No YouTube call, so no quota and no credits are consumed.
+      tags: [YouTube Comments]
+      x-quota-cost: 0
+      parameters:
+        - name: channelId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: YouTube channel ID (UC...) connected to the key's organization
+        - name: label
+          in: query
+          schema:
+            type: string
+          description: Only comments whose winning label is this one (e.g. `spam`)
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Opaque cursor from the previous page's meta.cursor
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+          description: Items per page (max 100)
+      responses:
+        "200":
+          description: Scored comments, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CommentClassification"
+                  error:
+                    type: "null"
+                  meta:
+                    type: object
+                    properties:
+                      cursor:
+                        type: string
+                        nullable: true
+                        description: Opaque cursor for the next page. Null on the last page.
+                      hasMore:
+                        type: boolean
+                      total:
+                        type: integer
+                        description: Comments matching channelId and label across all pages.
+                        example: 142
+                      quotaUnits:
+                        type: integer
+                        example: 0
+        "400":
+          description: Missing channelId, invalid parameters, or an invalid cursor (`INVALID_CURSOR`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key, or a key that is not organization-scoped (`API_KEY_REISSUE_REQUIRED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                data: null
+                error:
+                  code: API_KEY_REISSUE_REQUIRED
+                  message: API key is not organization-scoped.
+                  suggestion: Recreate this API key from your dashboard.
+                  status: 401
+        "404":
+          description: The channel is not connected to this organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           $ref: "#/components/responses/InternalError"
 

@@ -4,6 +4,8 @@ import {
   text,
   boolean,
   integer,
+  real,
+  primaryKey,
   timestamp,
   jsonb,
   unique,
@@ -641,8 +643,8 @@ export const descriptionPushJobItems = pgTable(
   })
 );
 
-// One row per destructive YouTube comment write (update or delete), recorded
-// BEFORE the write reaches YouTube. `comments.update` overwrites textOriginal
+// One row per destructive YouTube comment write (update, delete, reject or
+// ban), recorded BEFORE the write reaches YouTube. `comments.update` overwrites textOriginal
 // in place and YouTube keeps no version history, so this table is the only
 // surviving copy of the prior text.
 //
@@ -669,7 +671,8 @@ export const commentEdits = pgTable(
     commentId: text("comment_id").notNull(),
     // Nullable: callers pass it through from search results when they have it.
     videoId: text("video_id"),
-    // update | delete
+    // update | delete | reject | ban. reject and ban come from comment
+    // moderation (#156); a hold is reversible and writes no snapshot.
     verb: text("verb").notNull(),
     // original | display
     textSource: text("text_source").notNull(),
@@ -678,7 +681,8 @@ export const commentEdits = pgTable(
     afterText: text("after_text"),
     // pending | applied | failed | unknown
     status: text("status").notNull().default("pending"),
-    // mcp | rest | dashboard
+    // mcp | rest | dashboard | auto. `auto` is automatic comment moderation
+    // (#156), which writes a null userId.
     source: text("source").notNull(),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .notNull()
@@ -687,6 +691,336 @@ export const commentEdits = pgTable(
   (table) => ({
     orgCreatedAtIdx: index("comment_edits_org_created_at_idx").on(
       table.organizationId,
+      table.createdAt.desc()
+    ),
+  })
+);
+
+// ─── Automatic comment moderation (#156) ─────────────────────────────────────
+//
+// Every table below is channel-scoped: `youtube_channel_id` references
+// youtube_channels.id ON DELETE CASCADE, so disconnecting a channel removes
+// all of its stored comments, scores, rules, rubrics, examples, counters and
+// action log (I8). Org scoping goes through youtube_channels.organization_id.
+// `comment_edits` snapshots are NOT here: they survive disconnect and go only
+// with the org. Enumerated text columns mirror the types in
+// src/lib/moderation/types.ts.
+
+// One row per channel: whether the sweep runs, where it has read up to, and
+// the I2 cap pauses.
+export const commentAutomation = pgTable("comment_automation", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  youtubeChannelId: uuid("youtube_channel_id")
+    .notNull()
+    .unique()
+    .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  // Scoring starts here; comments posted before enable are never imported.
+  enabledAt: timestamp("enabled_at", { mode: "date", withTimezone: true }),
+  // Comments published before this instant are not ingested (one in the same
+  // second is, and deduped by id). Advances to now after a credit or quota
+  // skip, so missed windows are dropped.
+  cursor: timestamp("cursor", { mode: "date", withTimezone: true }),
+  // Set when the listing stopped at its page limit before reaching the
+  // cursor: the YouTube page token the next run resumes from, so the older
+  // comments are still read. The cursor stays put until they are.
+  listingPageToken: text("listing_page_token"),
+  // The newest comment seen by the listing being resumed; the cursor moves
+  // here once the resumed listing reaches the old cursor.
+  listingNewest: timestamp("listing_newest", { mode: "date", withTimezone: true }),
+  // Set when today's automatic reject+ban (or delete) cap is hit; matches
+  // then degrade to hold until an owner or admin resumes.
+  pausedRejectBan: boolean("paused_reject_ban").notNull().default(false),
+  pausedDelete: boolean("paused_delete").notNull().default(false),
+  // done | skipped: disabled | skipped: no published rubric |
+  // skipped: out of credits | skipped: quota breaker | skipped: youtube error
+  lastRunStatus: text("last_run_status"),
+  lastRunAt: timestamp("last_run_at", { mode: "date", withTimezone: true }),
+  // The resolved Jev model string from the most recent score (jev-latest
+  // resolves to a concrete version), shown on the dashboard.
+  lastModel: text("last_model"),
+  createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+// Viewer comments and replies on the channel's own videos, stored from enable
+// until disconnect. The sweep is the only writer of `text` (I7: the text only
+// ever reaches Jev as state; moderation calls take comment ids only).
+export const youtubeComments = pgTable(
+  "youtube_comments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    // YouTube comment id.
+    commentId: text("comment_id").notNull(),
+    // YouTube id of the top-level comment for a reply; null for top-level.
+    parentId: text("parent_id"),
+    videoId: text("video_id").notNull(),
+    authorChannelId: text("author_channel_id"),
+    authorDisplayName: text("author_display_name").notNull().default(""),
+    // Whole text; truncation happens only when building the Jev request.
+    text: text("text").notNull(),
+    // original | display (as comment_edits.text_source)
+    textSource: text("text_source").notNull(),
+    publishedAt: timestamp("published_at", {
+      mode: "date",
+      withTimezone: true,
+    }).notNull(),
+    // pending | scoring | scored | unscored. `unscored` is terminal: a Jev
+    // failure is never retried and never acted on.
+    scoreStatus: text("score_status").notNull().default("pending"),
+    // none | flagged | held | rejected | banned | deleted | released
+    moderationState: text("moderation_state").notNull().default("none"),
+    // Set on the first hold/reject/ban/delete (flag does not count, I4).
+    actionedAt: timestamp("actioned_at", { mode: "date", withTimezone: true }),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    uniqueChannelComment: unique("youtube_comments_channel_comment_unique").on(
+      table.youtubeChannelId,
+      table.commentId
+    ),
+    channelScoreStatusIdx: index("youtube_comments_channel_score_status_idx").on(
+      table.youtubeChannelId,
+      table.scoreStatus
+    ),
+    channelPublishedAtIdx: index("youtube_comments_channel_published_at_idx").on(
+      table.youtubeChannelId,
+      table.publishedAt.desc()
+    ),
+    channelModerationStateIdx: index(
+      "youtube_comments_channel_moderation_state_idx"
+    ).on(table.youtubeChannelId, table.moderationState),
+  })
+);
+
+// One Jev score per comment per rubric version. Reclassify adds a row for the
+// new version; it never rewrites an old one.
+export const commentScores = pgTable(
+  "comment_scores",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id")
+      .notNull()
+      .references(() => youtubeComments.id, { onDelete: "cascade" }),
+    rubricVersion: integer("rubric_version").notNull(),
+    // Resolved model string returned by Jev (never the `jev-latest` alias).
+    model: text("model").notNull(),
+    // The winning label.
+    choice: text("choice").notNull(),
+    // { [label]: probability }
+    probabilities: jsonb("probabilities").notNull(),
+    confidence: real("confidence"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    // When this score's rule decision was taken up (evaluated, and any match
+    // attempted by the chokepoint). Null = still owed a decision: the next
+    // sweep re-evaluates it if this is the published version.
+    decidedAt: timestamp("decided_at", { mode: "date", withTimezone: true }),
+    // Set atomically by the run that takes this score's decision to the
+    // chokepoint, so two overlapping runs never act on it twice. Cleared when
+    // the decision stays owed (nothing reached YouTube). A claim left by a
+    // killed step, or by an outcome that could not be recorded, is never
+    // re-taken: the comment waits for a person rather than risk acting twice.
+    decisionClaimedAt: timestamp("decision_claimed_at", { mode: "date", withTimezone: true }),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    undecidedIdx: index("comment_scores_undecided_idx")
+      .on(table.youtubeChannelId, table.rubricVersion)
+      .where(sql`${table.decidedAt} IS NULL`),
+    uniqueCommentVersion: unique("comment_scores_comment_version_unique").on(
+      table.commentId,
+      table.rubricVersion
+    ),
+    channelVersionIdx: index("comment_scores_channel_version_idx").on(
+      table.youtubeChannelId,
+      table.rubricVersion
+    ),
+  })
+);
+
+// Owner rules `{label, threshold, action}`. `setModerationRules` replaces the
+// channel's whole set in one transaction.
+export const commentModerationRules = pgTable(
+  "comment_moderation_rules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    // Inclusive: probability >= threshold matches. 0..1.
+    threshold: real("threshold").notNull(),
+    // flag | hold | reject | ban | delete (ban = reject + ban author)
+    action: text("action").notNull(),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    channelIdx: index("comment_moderation_rules_channel_idx").on(
+      table.youtubeChannelId
+    ),
+  })
+);
+
+// Versioned rubric: labels + owner wording + the accepted examples frozen at
+// publish. At most one draft and one published version per channel.
+export const commentRubrics = pgTable(
+  "comment_rubrics",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    // draft | published | superseded
+    status: text("status").notNull().default("draft"),
+    // [{ name, description }]
+    labels: jsonb("labels").notNull(),
+    instructions: text("instructions").notNull().default(""),
+    // [{ text, label }] — sent to Jev only inside `state` (I7).
+    examples: jsonb("examples").notNull().default(sql`'[]'::jsonb`),
+    publishedAt: timestamp("published_at", { mode: "date", withTimezone: true }),
+    publishedBy: uuid("published_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    uniqueChannelVersion: unique("comment_rubrics_channel_version_unique").on(
+      table.youtubeChannelId,
+      table.version
+    ),
+    onePublished: uniqueIndex("comment_rubrics_one_published")
+      .on(table.youtubeChannelId)
+      .where(sql`${table.status} = 'published'`),
+    oneDraft: uniqueIndex("comment_rubrics_one_draft")
+      .on(table.youtubeChannelId)
+      .where(sql`${table.status} = 'draft'`),
+  })
+);
+
+// Corrections: a member suggests a label for a stored comment, an owner or
+// admin accepts or rejects it. Accepted examples enter the next draft only.
+// The text is copied so an example outlives edits to the stored comment.
+export const commentRubricExamples = pgTable(
+  "comment_rubric_examples",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id").references(() => youtubeComments.id, {
+      onDelete: "set null",
+    }),
+    text: text("text").notNull(),
+    label: text("label").notNull(),
+    // suggested | accepted | rejected
+    status: text("status").notNull().default("suggested"),
+    suggestedBy: uuid("suggested_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reviewedBy: uuid("reviewed_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at", { mode: "date", withTimezone: true }),
+    // Rubric version this example was first published in; null until then.
+    includedInVersion: integer("included_in_version"),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    channelStatusIdx: index("comment_rubric_examples_channel_status_idx").on(
+      table.youtubeChannelId,
+      table.status
+    ),
+  })
+);
+
+// I2 cap counters, one row per channel per Pacific day (YYYY-MM-DD, the
+// YouTube quota day). Only applyModerationDecision writes them: reserve is a
+// row-locked (SELECT … FOR UPDATE) read-modify-write in one transaction, and
+// slots whose action provably never reached YouTube are released.
+export const commentModerationCounters = pgTable(
+  "comment_moderation_counters",
+  {
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    pacificDay: text("pacific_day").notNull(),
+    rejectBanCount: integer("reject_ban_count").notNull().default(0),
+    deleteCount: integer("delete_count").notNull().default(0),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.youtubeChannelId, table.pacificDay] }),
+  })
+);
+
+// Moderation action log, automatic and manual. One row per comment per
+// decision; `appliedAction` differs from `requestedAction` when a cap or
+// pause degraded it to hold.
+export const commentModerationActions = pgTable(
+  "comment_moderation_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    youtubeChannelId: uuid("youtube_channel_id")
+      .notNull()
+      .references(() => youtubeChannels.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id")
+      .notNull()
+      .references(() => youtubeComments.id, { onDelete: "cascade" }),
+    // flag | hold | reject | ban | delete | release
+    requestedAction: text("requested_action").notNull(),
+    appliedAction: text("applied_action").notNull(),
+    // cap_reached | paused | batch_failed | no_author; null when not degraded.
+    degradedReason: text("degraded_reason"),
+    // auto | dashboard
+    source: text("source").notNull(),
+    // Null for automatic actions.
+    userId: uuid("user_id").references(() => user.id, { onDelete: "set null" }),
+    // No FK: rules are replaced wholesale, and the log must outlive that.
+    ruleId: uuid("rule_id"),
+    rubricVersion: integer("rubric_version"),
+    // pending | applied | failed | unknown | skipped_non_production.
+    // unknown = the YouTube call failed ambiguously and may have landed.
+    status: text("status").notNull().default("pending"),
+    // Short machine reason for failed/unknown (quota, credits, timeBudget,
+    // snapshot_failed, youtube_rejected, youtube_ambiguous, …). Never text.
+    error: text("error"),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    channelCreatedAtIdx: index("comment_moderation_actions_channel_created_at_idx").on(
+      table.youtubeChannelId,
       table.createdAt.desc()
     ),
   })

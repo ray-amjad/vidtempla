@@ -167,6 +167,14 @@
       "coverage": { "rest": [], "mcp": [], "dashboard": ["dashboard/youtube/comments"] }
     },
     {
+      "path": "/docs/manage/comment-moderation",
+      "title": "Moderate comments automatically",
+      "description": "Score new viewer comments with a rubric and hold, reject, ban, or delete the ones your rules match.",
+      "source": "src/pages/docs/manage/comment-moderation.tsx",
+      "section": "Manage",
+      "coverage": { "rest": [], "mcp": [], "dashboard": ["dashboard/youtube/moderation"] }
+    },
+    {
       "path": "/docs/manage/history-and-drift",
       "title": "History, drift, and revert",
       "description": "Compare saved description versions, resolve direct YouTube edits, and restore an earlier managed description.",

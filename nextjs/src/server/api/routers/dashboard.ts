@@ -4,6 +4,7 @@ import { billingRouter } from "./dashboard/billing";
 import { apiKeysRouter } from "./dashboard/apiKeys";
 import { jobsRouter } from "./dashboard/jobs";
 import { commentsRouter } from "./dashboard/comments";
+import { moderationRouter } from "./dashboard/moderation";
 
 // Dashboard API
 export const dashboardRouter = router({
@@ -12,5 +13,6 @@ export const dashboardRouter = router({
   apiKeys: apiKeysRouter,
   jobs: jobsRouter,
   comments: commentsRouter,
+  moderation: moderationRouter,
 });
 

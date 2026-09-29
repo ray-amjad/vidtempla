@@ -14,6 +14,10 @@ export const serverSchema = z.object({
   YOUTUBE_CLIENT_SECRET: z.string(),
   YOUTUBE_REDIRECT_URI: z.string().url(),
 
+  // TypeSafe Jev (comment moderation, #156). Optional: without it comment
+  // scoring is deferred and nothing else is affected.
+  TYPESAFE_API_KEY: z.string().optional(),
+
   // Encryption
   // V2 is the currently-active key (required). V3 is reserved for the next
   // rotation; set it ahead of bumping ACTIVE_VERSION in `utils/encryption.ts`.
@@ -65,6 +69,9 @@ export const serverEnv = {
   YOUTUBE_CLIENT_ID: process.env.YOUTUBE_CLIENT_ID,
   YOUTUBE_CLIENT_SECRET: process.env.YOUTUBE_CLIENT_SECRET,
   YOUTUBE_REDIRECT_URI: process.env.YOUTUBE_REDIRECT_URI,
+
+  // TypeSafe Jev
+  TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY,
 
   // Encryption
   ENCRYPTION_KEY_V2: process.env.ENCRYPTION_KEY_V2,
