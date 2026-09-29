@@ -2883,8 +2883,14 @@ paths:
       summary: List the comment edit log
       description: |
         Returns every comment update and deletion made through VidTempla for this
-        workspace, newest first. Each row holds the comment's text as it was before the
-        write — the only surviving copy, because YouTube keeps no comment history.
+        workspace, newest first, plus every reject and ban made by comment moderation.
+        Each row holds the comment's text as it was before the write — the only
+        surviving copy, because YouTube keeps no comment history.
+
+        `source: "auto"` rows come from automatic comment moderation and carry no
+        acting user. A moderation row's `beforeText` is the text VidTempla stored and
+        scored, which is the text that was acted on. A hold is reversible and writes
+        no row.
 
         Only rows with `textSource: "original"` hold restorable text. A `"display"` row
         is the HTML-marked-up rendering of a third-party comment and is an audit record
@@ -2949,7 +2955,8 @@ paths:
                           nullable: true
                         verb:
                           type: string
-                          enum: [update, delete]
+                          enum: [update, delete, reject, ban]
+                          description: reject and ban come from comment moderation; ban also bans the author
                         textSource:
                           type: string
                           enum: [original, display]
@@ -2965,7 +2972,8 @@ paths:
                           enum: [pending, applied, failed, unknown]
                         source:
                           type: string
-                          enum: [mcp, rest, dashboard]
+                          enum: [mcp, rest, dashboard, auto]
+                          description: auto is automatic comment moderation, with no acting user
                         createdAt:
                           type: string
                           format: date-time

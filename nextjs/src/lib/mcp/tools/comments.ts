@@ -156,7 +156,7 @@ export function registerCommentTools(server: McpServer) {
 
   server.tool(
     "list_comment_edits",
-    "List the audit trail of comment edits and deletions made through VidTempla, newest first. Each row records the text as it was before the write. Only rows with textSource 'original' hold restorable text; 'display' rows are HTML-marked-up audit records. Free — no YouTube call.",
+    "List the audit trail of comment edits and deletions made through VidTempla, newest first, plus the rejects and bans made by comment moderation. Each row records the text as it was before the write. verb is update, delete, reject or ban; source is mcp, rest, dashboard or auto (automatic moderation, no acting user). Only rows with textSource 'original' hold restorable text; 'display' rows are HTML-marked-up audit records. Free — no YouTube call.",
     {
       channelId: z.string().optional().describe("Only rows for this YouTube channel ID"),
       commentId: z.string().optional().describe("Only rows for this comment ID"),

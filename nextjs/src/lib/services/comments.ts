@@ -44,7 +44,8 @@ import type { ServiceResult, JsonValue, PaginationMeta, PaginationOpts } from ".
  */
 
 const READ_CREDITS = 1;
-const WRITE_CREDITS = 50;
+/** Also the per-comment cost of a moderation action (#156). */
+export const WRITE_CREDITS = 50;
 
 /** I5: a bulk batch never exceeds 40 items — the runtime budget depends on it. */
 export const BULK_MAX_ITEMS = 40;
@@ -289,51 +290,73 @@ type ChargeOutcome = "ok" | "insufficient" | "error";
  * paid for turns out to have done nothing — 0 whenever nothing was really
  * deducted, so a refund can never invent credits.
  */
-interface Charge {
+export interface CommentCharge {
   outcome: ChargeOutcome;
   refundable: number;
 }
+type Charge = CommentCharge;
 
 /**
- * Consumes credits and records them on the caller's meter in one step, so the
- * two can never drift. A throw from the ledger is folded into `error` rather
- * than propagated: callers have snapshot rows to finalize before they return.
+ * Consumes credits and, when given one, records them on a meter in the same
+ * step, so the two can never drift. A throw from the ledger is folded into
+ * `error` rather than propagated: callers have snapshot rows to finalize
+ * before they return.
  *
  * `consumeCredits` *fails open*: on a DB error it reports success with an
  * infinite `remaining` having deducted nothing at all. That path must never be
  * refunded, so a finite `remaining` — the balance the UPDATE actually returned
  * — is what marks a charge as genuinely deducted.
+ *
+ * Exported for the comment-moderation chokepoint (#156,
+ * `lib/moderation/apply.ts`), which bills on an organization with no acting
+ * user, so it cannot build a `CommentContext`.
  */
-async function chargeCredits(ctx: CommentContext, cost: number): Promise<Charge> {
+export async function chargeCommentCredits(
+  organizationId: string,
+  cost: number,
+  meter?: CreditMeter
+): Promise<CommentCharge> {
   let success: boolean;
   let remaining: number;
   try {
-    ({ success, remaining } = await consumeCredits(ctx.organizationId, cost));
+    ({ success, remaining } = await consumeCredits(organizationId, cost));
   } catch (err) {
     console.error("comments: credit ledger unavailable", err);
     return { outcome: "error", refundable: 0 };
   }
   if (!success) return { outcome: "insufficient", refundable: 0 };
-  ctx.meter.charge(cost);
+  meter?.charge(cost);
   return { outcome: "ok", refundable: Number.isFinite(remaining) ? cost : 0 };
 }
 
 /**
  * Gives a charge back after the call it paid for provably did no work, and
- * takes it off the meter so the request log reports the net.
+ * takes it off the meter (when given) so the request log reports the net.
  *
  * Only ever called where the evidence is definitive. An ambiguous write —
  * a timeout, a 5xx, a dropped socket — may have landed on YouTube, and
  * refunding one would bill nothing for work that really happened; the
  * `comment_edits` status machine draws the same line (`failed` vs `unknown`).
  */
-async function refundCharge(ctx: CommentContext, charge: Charge): Promise<void> {
+export async function refundCommentCharge(
+  organizationId: string,
+  charge: CommentCharge,
+  meter?: CreditMeter
+): Promise<void> {
   if (charge.refundable <= 0) return;
   // Only decrement the meter if the ledger really credited it back: an
   // unreachable ledger means the caller stays billed, and the log must say so.
-  if (await refundCredits(ctx.organizationId, charge.refundable)) {
-    ctx.meter.refund(charge.refundable);
+  if (await refundCredits(organizationId, charge.refundable)) {
+    meter?.refund(charge.refundable);
   }
+}
+
+async function chargeCredits(ctx: CommentContext, cost: number): Promise<Charge> {
+  return chargeCommentCredits(ctx.organizationId, cost, ctx.meter);
+}
+
+async function refundCharge(ctx: CommentContext, charge: Charge): Promise<void> {
+  return refundCommentCharge(ctx.organizationId, charge, ctx.meter);
 }
 
 /** Maps a charge failure onto the envelope it deserves. */

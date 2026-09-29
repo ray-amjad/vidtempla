@@ -941,8 +941,9 @@ export const commentRubricExamples = pgTable(
 );
 
 // I2 cap counters, one row per channel per Pacific day (YYYY-MM-DD, the
-// YouTube quota day). Only applyModerationDecision writes them, via an atomic
-// reserve (UPDATE … LEAST … RETURNING).
+// YouTube quota day). Only applyModerationDecision writes them: reserve is a
+// row-locked (SELECT … FOR UPDATE) read-modify-write in one transaction, and
+// slots whose action provably never reached YouTube are released.
 export const commentModerationCounters = pgTable(
   "comment_moderation_counters",
   {
@@ -977,7 +978,7 @@ export const commentModerationActions = pgTable(
     // flag | hold | reject | ban | delete | release
     requestedAction: text("requested_action").notNull(),
     appliedAction: text("applied_action").notNull(),
-    // e.g. cap_reached | paused | batch_failed; null when not degraded.
+    // cap_reached | paused | batch_failed | no_author; null when not degraded.
     degradedReason: text("degraded_reason"),
     // auto | dashboard
     source: text("source").notNull(),
@@ -986,8 +987,11 @@ export const commentModerationActions = pgTable(
     // No FK: rules are replaced wholesale, and the log must outlive that.
     ruleId: uuid("rule_id"),
     rubricVersion: integer("rubric_version"),
-    // pending | applied | failed | skipped_non_production
+    // pending | applied | failed | unknown | skipped_non_production.
+    // unknown = the YouTube call failed ambiguously and may have landed.
     status: text("status").notNull().default("pending"),
+    // Short machine reason for failed/unknown (quota, credits, timeBudget,
+    // snapshot_failed, youtube_rejected, youtube_ambiguous, …). Never text.
     error: text("error"),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .notNull()

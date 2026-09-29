@@ -1017,6 +1017,46 @@ export async function deleteComment(
   });
 }
 
+/** Most comment ids `comments.setModerationStatus` accepts in one call. */
+export const MODERATION_STATUS_MAX_IDS = 50;
+
+/**
+ * Sets the moderation status of 1–50 comments on the channel's own videos
+ * (hold for review, publish, or reject — optionally banning the author).
+ * `rejected` cannot be undone: YouTube refuses `rejected` → `published`.
+ *
+ * Quota cost: 50 units per call, for up to 50 ids.
+ *
+ * #156 I1: only `src/lib/moderation/apply.ts` (applyModerationDecision) may
+ * import this — enforced by scripts/unit/moderation-chokepoint.mjs. Only
+ * comment ids reach it, never comment text (I7).
+ */
+export async function setCommentModerationStatus(
+  accessToken: string,
+  commentIds: string[],
+  moderationStatus: 'heldForReview' | 'published' | 'rejected',
+  opts: { banAuthor?: boolean } = {}
+): Promise<void> {
+  if (commentIds.length < 1 || commentIds.length > MODERATION_STATUS_MAX_IDS) {
+    throw new Error(
+      `setCommentModerationStatus takes 1-${MODERATION_STATUS_MAX_IDS} ids, got ${commentIds.length}`
+    );
+  }
+  const banAuthor = opts.banAuthor ?? false;
+  if (banAuthor && moderationStatus !== 'rejected') {
+    throw new Error('banAuthor is only valid with moderationStatus rejected');
+  }
+  await axios.post(`${YOUTUBE_API_BASE}/comments/setModerationStatus`, null, {
+    params: {
+      id: commentIds.join(','),
+      moderationStatus,
+      ...(banAuthor ? { banAuthor: true } : {}),
+    },
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(YOUTUBE_CALL_TIMEOUT_MS),
+  });
+}
+
 // ─── YouTube Playlists API functions ─────────────────────────────────
 
 export interface YouTubePlaylist {

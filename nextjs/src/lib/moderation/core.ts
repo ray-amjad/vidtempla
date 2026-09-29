@@ -14,6 +14,20 @@
  */
 
 import type {
+  ActionStatus,
+  ApplyDeps,
+  ApplyHaltReason,
+  ApplyInput,
+  ApplyOutcome,
+  ApplyResult,
+  CapClass,
+  ChannelRef,
+  CreditCharge,
+  DegradedReason,
+  ModerationDecision,
+  ModerationState,
+  RefusalReason,
+  RequestedAction,
   IngestComment,
   IngestFilterOptions,
   IngestFilterResult,
@@ -401,4 +415,489 @@ export function pacificDayKey(now: Date): string {
   const p: Record<string, string> = {};
   for (const part of parts) if (part.type !== "literal") p[part.type] = part.value;
   return `${p.year}-${p.month}-${p.day}`;
+}
+
+// ─── applyDecisions: the moderation chokepoint (phase 2) ─────────────────────
+
+/**
+ * Wall clock one applyDecisions call allows itself when the caller gives no
+ * deadline. Every surface pins `maxDuration = 60`; like the comment service's
+ * BULK_BUDGET_MS, it stops *starting* YouTube calls once the next one could
+ * not finish in time, so a platform kill never strands `pending` rows.
+ */
+export const APPLY_BUDGET_MS = 50_000;
+/** Credits per moderated comment, as every comment write (services/comments.ts). */
+export const MODERATION_WRITE_CREDITS = 50;
+/** `comments.setModerationStatus` takes at most 50 ids per call. */
+export const MODERATION_BATCH_MAX = 50;
+/** Default ceiling of one YouTube call (clients/youtube.ts YOUTUBE_CALL_TIMEOUT_MS). */
+const DEFAULT_CALL_TIMEOUT_MS = 15_000;
+
+/** The capped class of an action, or null (hold, flag and release are uncapped). */
+function capClassOf(action: RequestedAction): CapClass | null {
+  if (action === "reject" || action === "ban") return "rejectBan";
+  if (action === "delete") return "delete";
+  return null;
+}
+
+const CAPS: Record<CapClass, number> = {
+  rejectBan: DAILY_REJECT_BAN_CAP,
+  delete: DAILY_DELETE_CAP,
+};
+
+/** Severity of a comment's current state, for "is the manual action stronger". */
+const STATE_SEVERITY: Record<ModerationState, number> = {
+  none: 0,
+  released: 0,
+  flagged: SEVERITY.flag,
+  held: SEVERITY.hold,
+  rejected: SEVERITY.reject,
+  banned: SEVERITY.ban,
+  deleted: SEVERITY.delete,
+};
+
+/** I4: flag is not an action, so only these states count as actioned. */
+function isActioned(state: ModerationState): boolean {
+  return state !== "none" && state !== "flagged";
+}
+
+/** Collapse rank: release is the weakest, so any real action beats it. */
+function rank(action: RequestedAction): number {
+  return action === "release" ? 0 : SEVERITY[action];
+}
+
+function refusalFor(
+  d: ModerationDecision,
+  channel: ChannelRef,
+  automatic: boolean
+): RefusalReason | null {
+  const c = d.comment;
+  if (c.youtubeChannelId !== channel.id) return "wrong_channel";
+  // I5: the channel's own comments are never acted on.
+  if (c.authorChannelId !== null && c.authorChannelId === channel.channelId) return "own_channel";
+  if (d.action === "release") {
+    if (automatic) return "release_manual_only";
+    return c.moderationState === "held" ? null : "not_held";
+  }
+  if (automatic) return isActioned(c.moderationState) ? "already_actioned" : null;
+  // Manual: flag only an un-actioned comment; anything else must be stronger
+  // than what the comment already is (YouTube cannot un-reject, and a
+  // deleted comment is gone).
+  if (d.action === "flag") return isActioned(c.moderationState) ? "already_actioned" : null;
+  return SEVERITY[d.action] > STATE_SEVERITY[c.moderationState] ? null : "not_stronger";
+}
+
+/** One comment on its way through the chokepoint. */
+interface WorkItem {
+  d: ModerationDecision;
+  applied: RequestedAction;
+  degraded: DegradedReason | null;
+  status: ActionStatus;
+  error: string | null;
+  editId: string | null;
+  charge: CreditCharge | null;
+  /** Every YouTube attempt for this comment was a definitive (4xx) rejection. */
+  allDefinitive: boolean;
+  attempts: number;
+  /** The cap slot this comment holds, if any. */
+  reserved: CapClass | null;
+  /** The capped action (reject/ban/delete) may have reached YouTube. */
+  cappedLanded: boolean;
+  /** Whether the outcome has been handed to the store. */
+  settled: boolean;
+}
+
+type YouTubeOp = "hold" | "reject" | "ban" | "release" | "delete";
+
+/**
+ * The only path to a moderation effect (I1). Pure orchestration: every side
+ * effect goes through `deps`, so the unit tests drive it with fakes.
+ *
+ * In order:
+ * 1. **Refuse** a channel with no organization (no one to bill), a comment of
+ *    another channel, the channel's own comment (I5), an already-actioned
+ *    comment when the actor is automatic (I4 — a flag is not an action),
+ *    and a release that is automatic or of a comment that is not held.
+ * 2. **Collapse** several decisions for one comment to the most severe (I3).
+ *    A ban of a comment with no author channel degrades to reject.
+ * 3. **Flag** is database-only: applied at once, no YouTube call, no credits.
+ * 4. **Production gate**: an automatic actor outside production records every
+ *    other decision as `skipped_non_production` — no YouTube call, no
+ *    credits, no snapshot, no counters. Manual actions are not gated.
+ * 5. **Quota breaker**: a tripped breaker stops every automatic write.
+ * 6. **Caps (I2)**, automatic only: a paused class degrades to hold; otherwise
+ *    today's slots are reserved atomically and whatever is not granted
+ *    degrades to hold and pauses the class. Hold is uncapped.
+ * 7. **Execute**, most severe first: deletes one by one, then reject/ban,
+ *    hold and release in batches of ≤ 50 ids. Per call: time-budget check,
+ *    then a `pending` comment_edits snapshot of the stored text for every
+ *    reject/ban/delete (I6: source `auto` + null userId when automatic), then
+ *    50 credits per comment, then the call. A failed reject/ban batch retries
+ *    each of its comments individually as HOLD — never as something stronger.
+ *    A daily-quota error trips the breaker; it, a rate limit, an auth failure,
+ *    a credit refusal or the time budget halt everything not yet sent.
+ * 8. **Settle**: a comment's credits are refunded only when every YouTube
+ *    attempt for it was a definitive 4xx (ambiguous failures may have landed,
+ *    as in services/comments.ts); cap slots come back for capped actions that
+ *    provably never reached YouTube; the action log and moderation_state are
+ *    written per call, so a killed process loses at most one call's log rows.
+ */
+export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promise<ApplyResult> {
+  const { channel, actor } = input;
+  const automatic = actor.source === "auto";
+  const startedAt = deps.clock.now();
+  const deadlineMs = input.deadlineMs ?? startedAt.getTime() + APPLY_BUDGET_MS;
+  const callTimeoutMs = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  const day = pacificDayKey(startedAt);
+  const result: ApplyResult = {
+    outcomes: [],
+    refused: [],
+    halted: null,
+    paused: [],
+    youtubeCalls: 0,
+  };
+
+  const organizationId = channel.organizationId;
+  if (!organizationId) {
+    for (const d of input.decisions) {
+      result.refused.push({ commentId: d.comment.id, action: d.action, reason: "no_organization" });
+    }
+    return result;
+  }
+
+  // ── 1–2. Collapse (I3), then refuse ──
+  const collapsed = new Map<string, ModerationDecision>();
+  for (const d of input.decisions) {
+    const prev = collapsed.get(d.comment.id);
+    if (!prev || rank(d.action) > rank(prev.action)) collapsed.set(d.comment.id, d);
+  }
+
+  const items: WorkItem[] = [];
+  for (const d of collapsed.values()) {
+    const reason = refusalFor(d, channel, automatic);
+    if (reason) {
+      result.refused.push({ commentId: d.comment.id, action: d.action, reason });
+      continue;
+    }
+    const noAuthor = d.action === "ban" && !d.comment.authorChannelId;
+    items.push({
+      d,
+      applied: noAuthor ? "reject" : d.action,
+      degraded: noAuthor ? "no_author" : null,
+      status: "pending",
+      error: null,
+      editId: null,
+      charge: null,
+      allDefinitive: true,
+      attempts: 0,
+      reserved: null,
+      cappedLanded: false,
+      settled: false,
+    });
+  }
+
+  const outcomeOf = (it: WorkItem): ApplyOutcome => ({
+    commentId: it.d.comment.id,
+    youtubeCommentId: it.d.comment.commentId,
+    requestedAction: it.d.action,
+    appliedAction: it.applied,
+    degradedReason: it.degraded,
+    status: it.status,
+    error: it.error,
+    ruleId: it.d.ruleId,
+    rubricVersion: it.d.rubricVersion,
+    editId: it.editId,
+    creditsCharged: it.charge && it.status !== "skipped_non_production" ? it.charge.refundable : 0,
+  });
+
+  /** Hands finished items to the store (action log + moderation_state). */
+  const record = async (batch: WorkItem[]) => {
+    const done = batch.filter((it) => !it.settled);
+    if (done.length === 0) return;
+    for (const it of done) it.settled = true;
+    const outcomes = done.map(outcomeOf);
+    result.outcomes.push(...outcomes);
+    await deps.store.recordOutcomes(channel, actor, outcomes, deps.clock.now());
+  };
+
+  // ── 3. Flags: database only ──
+  const flags = items.filter((it) => it.applied === "flag");
+  for (const it of flags) it.status = "applied";
+  await record(flags);
+
+  const writes = items.filter((it) => it.applied !== "flag");
+  if (writes.length === 0) return result;
+
+  // ── 4. Production gate (automatic only) ──
+  if (automatic && !deps.isProduction()) {
+    for (const it of writes) it.status = "skipped_non_production";
+    await record(writes);
+    return result;
+  }
+
+  // ── 5. Quota breaker (automatic only; manual actions behave as today) ──
+  if (automatic && (await deps.quota.isTripped())) {
+    result.halted = "quotaBreaker";
+    for (const it of writes) {
+      it.status = "failed";
+      it.error = "quotaBreaker";
+    }
+    await record(writes);
+    return result;
+  }
+
+  // ── 6. Caps (I2, automatic only) ──
+  if (automatic) {
+    const pauseFlags = await deps.store.getPauseFlags(channel.id);
+    for (const cls of ["rejectBan", "delete"] as CapClass[]) {
+      const inClass = writes.filter((it) => capClassOf(it.applied) === cls);
+      if (inClass.length === 0) continue;
+      if (pauseFlags[cls]) {
+        for (const it of inClass) {
+          it.applied = "hold";
+          it.degraded = "paused";
+        }
+        continue;
+      }
+      const granted = await deps.counters.reserve(channel.id, day, cls, inClass.length, CAPS[cls]);
+      inClass.forEach((it, i) => {
+        if (i < granted) {
+          it.reserved = cls;
+        } else {
+          it.applied = "hold";
+          it.degraded = "cap_reached";
+        }
+      });
+      if (granted < inClass.length) {
+        await deps.store.setPaused(channel.id, cls);
+        result.paused.push(cls);
+      }
+    }
+  }
+
+  // ── 7. Execute ──
+  const fail = (it: WorkItem, error: string) => {
+    it.status = "failed";
+    it.error = error;
+  };
+
+  const halt = (reason: ApplyHaltReason) => {
+    if (!result.halted) result.halted = reason;
+  };
+
+  /** The only place a YouTube write happens. */
+  const callYouTube = async (op: YouTubeOp, ids: string[]) => {
+    result.youtubeCalls++;
+    if (op === "delete") return deps.youtube.deleteComment(ids[0]!);
+    const status = op === "hold" ? "heldForReview" : op === "release" ? "published" : "rejected";
+    return deps.youtube.setModerationStatus(ids, status, { banAuthor: op === "ban" });
+  };
+
+  const outOfTime = () => deps.clock.now().getTime() + callTimeoutMs > deadlineMs;
+
+  /** Settles each item's snapshot to match its status. */
+  const settleSnapshots = async (batch: WorkItem[], landed: "applied" | "failed" | "unknown") => {
+    for (const it of batch) {
+      if (it.editId) await deps.store.settleSnapshot(it.editId, landed);
+    }
+  };
+
+  /** A YouTube throw, applied to the items of the failed call. */
+  const noteFailure = async (batch: WorkItem[], err: unknown) => {
+    const cls = deps.classifyError(err);
+    for (const it of batch) {
+      it.allDefinitive = it.allDefinitive && cls.definitive;
+      if (!cls.definitive && capClassOf(it.applied) !== null) it.cappedLanded = true;
+    }
+    if (cls.halt) {
+      if (cls.halt === "quota") {
+        try {
+          await deps.quota.trip();
+        } catch {
+          // Recording the breaker must not mask the call's own outcome.
+        }
+      }
+      halt(cls.halt);
+    }
+    return cls;
+  };
+
+  /**
+   * The HOLD retry for one comment of a failed reject/ban batch. It reuses the
+   * comment's existing charge: one comment, one 50-credit charge.
+   */
+  const retryAsHold = async (it: WorkItem) => {
+    it.applied = "hold";
+    it.degraded = "batch_failed";
+    if (result.halted) return fail(it, result.halted);
+    if (outOfTime()) {
+      halt("timeBudget");
+      return fail(it, "timeBudget");
+    }
+    it.attempts++;
+    try {
+      await callYouTube("hold", [it.d.comment.commentId]);
+      it.status = "applied";
+      it.error = null;
+    } catch (err) {
+      const cls = await noteFailure([it], err);
+      it.status = cls.definitive ? "failed" : "unknown";
+      it.error = cls.halt ?? (cls.definitive ? "youtube_rejected" : "youtube_ambiguous");
+    }
+  };
+
+  /** Refunds, cap-slot releases and the log write for one finished unit. */
+  const finish = async (batch: WorkItem[]) => {
+    for (const it of batch) {
+      // Nothing landed: attempted, not applied, and every attempt was a 4xx.
+      const nothingLanded = it.attempts > 0 && it.status !== "applied" && it.allDefinitive;
+      if (it.charge && nothingLanded && it.charge.refundable > 0) {
+        await deps.credits.refund(organizationId, it.charge);
+        it.charge = { outcome: it.charge.outcome, refundable: 0 };
+      }
+    }
+    const toRelease: Record<CapClass, number> = { rejectBan: 0, delete: 0 };
+    for (const it of batch) {
+      if (it.reserved && !it.cappedLanded) toRelease[it.reserved]++;
+      it.reserved = null;
+    }
+    for (const cls of ["rejectBan", "delete"] as CapClass[]) {
+      if (toRelease[cls] > 0) await deps.counters.release(channel.id, day, cls, toRelease[cls]);
+    }
+    await record(batch);
+  };
+
+  /** One YouTube call's worth of items: snapshot → charge → call → settle. */
+  const runUnit = async (op: YouTubeOp, unit: WorkItem[]) => {
+    if (result.halted) {
+      for (const it of unit) fail(it, result.halted);
+      return finish(unit);
+    }
+    if (outOfTime()) {
+      halt("timeBudget");
+      for (const it of unit) fail(it, "timeBudget");
+      return finish(unit);
+    }
+
+    // I6: snapshot the stored text before anything reaches YouTube.
+    const snapshotted: WorkItem[] = [];
+    for (const it of unit) {
+      if (op === "reject" || op === "ban" || op === "delete") {
+        try {
+          it.editId = await deps.store.insertSnapshot({
+            organizationId,
+            userId: automatic ? null : actor.userId,
+            channelId: channel.channelId,
+            commentId: it.d.comment.commentId,
+            videoId: it.d.comment.videoId || null,
+            verb: op,
+            textSource: it.d.comment.textSource,
+            beforeText: it.d.comment.text,
+            source: actor.source,
+          });
+        } catch {
+          fail(it, "snapshot_failed");
+          continue;
+        }
+      }
+      snapshotted.push(it);
+    }
+
+    // Credits: 50 per comment, charged as attempted, never up front.
+    const paid: WorkItem[] = [];
+    for (const it of snapshotted) {
+      if (result.halted) {
+        fail(it, result.halted);
+        continue;
+      }
+      const charge = await deps.credits.charge(organizationId, MODERATION_WRITE_CREDITS);
+      if (charge.outcome !== "ok") {
+        halt("credits");
+        fail(it, "credits");
+        continue;
+      }
+      it.charge = charge;
+      paid.push(it);
+    }
+    // A snapshot whose write was never issued is provably `failed`.
+    await settleSnapshots(
+      snapshotted.filter((it) => !paid.includes(it)),
+      "failed"
+    );
+    if (paid.length === 0) return finish(unit);
+
+    for (const it of paid) it.attempts++;
+    try {
+      await callYouTube(
+        op,
+        paid.map((it) => it.d.comment.commentId)
+      );
+      for (const it of paid) {
+        it.status = "applied";
+        if (capClassOf(op) !== null) it.cappedLanded = true;
+      }
+      await settleSnapshots(paid, "applied");
+      return finish(unit);
+    } catch (err) {
+      const cls = await noteFailure(paid, err);
+      await settleSnapshots(paid, cls.definitive ? "failed" : "unknown");
+      const retry =
+        !cls.halt && (op === "reject" || op === "ban" || ((op === "hold" || op === "release") && paid.length > 1));
+      if (!retry) {
+        for (const it of paid) {
+          it.status = cls.definitive ? "failed" : "unknown";
+          it.error = cls.halt ?? (cls.definitive ? "youtube_rejected" : "youtube_ambiguous");
+        }
+        return finish(unit);
+      }
+      // The spec cannot say what YouTube does with one bad id in a batch, so
+      // the whole call counts as failed and each comment is retried alone —
+      // reject/ban as HOLD, never stronger; hold/release as themselves.
+      for (const it of paid) {
+        if (op === "reject" || op === "ban") {
+          await retryAsHold(it);
+          continue;
+        }
+        if (result.halted) {
+          fail(it, result.halted);
+          continue;
+        }
+        if (outOfTime()) {
+          halt("timeBudget");
+          fail(it, "timeBudget");
+          continue;
+        }
+        it.attempts++;
+        try {
+          await callYouTube(op, [it.d.comment.commentId]);
+          it.status = "applied";
+        } catch (e) {
+          const c = await noteFailure([it], e);
+          it.status = c.definitive ? "failed" : "unknown";
+          it.error = c.halt ?? (c.definitive ? "youtube_rejected" : "youtube_ambiguous");
+        }
+      }
+      return finish(unit);
+    }
+  };
+
+  const chunk = (list: WorkItem[]) => {
+    const out: WorkItem[][] = [];
+    for (let i = 0; i < list.length; i += MODERATION_BATCH_MAX) {
+      out.push(list.slice(i, i + MODERATION_BATCH_MAX));
+    }
+    return out;
+  };
+
+  // Grouped once, before anything runs: a reject/ban retried as hold must not
+  // be picked up again by the hold batches. Most severe first, so a budget
+  // or credit halt costs the weakest actions.
+  const units: Array<[YouTubeOp, WorkItem[]]> = [];
+  for (const it of writes.filter((w) => w.applied === "delete")) units.push(["delete", [it]]);
+  for (const op of ["ban", "reject", "hold", "release"] as const) {
+    for (const unit of chunk(writes.filter((w) => w.applied === op))) units.push([op, unit]);
+  }
+  for (const [op, unit] of units) await runUnit(op, unit);
+
+  return result;
 }

@@ -68,3 +68,39 @@ table-completeness guard with no new tables yet). Every other new test fails.
 
 Note: `spam-comments.txt` holds 2 entries, not the 5 the plan assumed; the
 test asserts at least 2 and runs every entry.
+
+### Phase 2 — 2026-09-29
+
+**Red** (stub `applyDecisions` in `core.ts` returning an empty result; no
+`setCommentModerationStatus` in `clients/youtube.ts`; no `moderation/apply.ts`):
+
+| File | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `moderation-caps.mjs` | 25 | 1 | 24 |
+| `moderation-chokepoint.mjs` | 8 | 4 | 4 |
+| `npm run test:unit` total | 118 | 90 | 28 |
+
+The 5 stub passes hold by construction: "only comment ids reach the YouTube
+port" (the stub calls nothing), and four chokepoint guards that are true before
+any code exists (the scan is non-vacuous, no other file names
+`setCommentModerationStatus`, the feature's other files import no YouTube
+write, `core.ts` has no runtime imports). The four that need the chokepoint
+(`client defines setCommentModerationStatus`, `only apply.ts imports it`,
+`deleteComment importers`, `apply.ts exports applyModerationDecision`) fail.
+
+**Green** (`applyDecisions` in `src/lib/moderation/core.ts`,
+`setCommentModerationStatus` in `src/lib/clients/youtube.ts`,
+`applyModerationDecision` + Drizzle adapters in `src/lib/moderation/apply.ts`,
+credit helpers exported from `src/lib/services/comments.ts`):
+
+| File | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `moderation-caps.mjs` | 25 | 25 | 0 |
+| `moderation-chokepoint.mjs` | 8 | 8 | 0 |
+| `npm run test:unit` total | 118 | 118 | 0 |
+
+`npm run test:org-guards`, `npm run test:docs-coverage` and
+`npx tsc --noEmit -p .` pass. The chokepoint test was also mutation-checked:
+a temporary file under `src/lib/moderation/` importing
+`setCommentModerationStatus as s` through a relative path, with a NUL byte in
+it, failed 3 of its 8 tests; the file was then removed.
