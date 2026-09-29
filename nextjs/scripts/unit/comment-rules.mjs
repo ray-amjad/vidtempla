@@ -213,8 +213,10 @@ const RC_LABELS = ["spam", "self-promotion", "scam", "abusive", "normal"].map((n
  * whatever its state, so the test proves core's own I4 input filter rather
  * than the SQL. `v2` is what the new rubric scores each comment as.
  */
-function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules, outcomeFor, halted = null, enabled = true } = {}) {
+function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules, outcomeFor, halted = null, enabled = true, claimLost } = {}) {
   const decided = [];
+  const claimed = new Set();
+  const released = [];
   let nowMs = Date.parse("2026-09-29T18:00:00Z");
   const events = [];
   const applyCalls = [];
@@ -280,6 +282,17 @@ function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped =
       async markDecided(_ch, ids, version) {
         for (const id of ids) decided.push([id, version]);
       },
+      async claimDecisions(_ch, _version, ids) {
+        const won = ids.filter((id) => !claimed.has(id) && !claimLost?.(id));
+        for (const id of won) claimed.add(id);
+        return won;
+      },
+      async releaseDecisionClaims(_ch, _version, ids) {
+        for (const id of ids) {
+          claimed.delete(id);
+          released.push(id);
+        }
+      },
       async setRunStatus() {},
     },
     apply: {
@@ -297,7 +310,7 @@ function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped =
       },
     },
   };
-  return { deps, events, applyCalls, scores, jevCalls, youtubeReads, decided, balance: () => balance };
+  return { deps, events, applyCalls, scores, jevCalls, youtubeReads, decided, claimed, released, balance: () => balance };
 }
 
 const SPAMMY = { spam: 0.96, normal: 0.02 };
@@ -495,4 +508,25 @@ test("R2 #4: reclassify on a disabled channel ends without scoring, charging or 
   assert.equal(h.jevCalls.length, 0);
   assert.equal(h.applyCalls.length, 0);
   assert.deepEqual(h.events, []);
+});
+
+test("R2 #5: reclassify applies only the decisions it claimed; a lost claim is not stamped decided", async () => {
+  const rows = [rcRow("a", "none"), rcRow("b", "none")];
+  const h = reclassifyHarness({ rows, v2: { a: SPAMMY, b: SPAMMY }, claimLost: (id) => id === "b" });
+  await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.deepEqual(h.applyCalls.flat().map((d) => d.commentId), ["a"]);
+  assert.deepEqual(h.decided.map(([id]) => id), ["a"]);
+});
+
+test("R2 #5: reclassify releases the claim of a decision a halt left owed", async () => {
+  const rows = [rcRow("a", "none")];
+  const h = reclassifyHarness({
+    rows,
+    v2: { a: SPAMMY },
+    halted: "rateLimit",
+    outcomeFor: (d) => ({ commentId: d.commentId, status: "failed", error: "rateLimit", appliedAction: d.action, youtubeAttempted: true, retryable: true }),
+  });
+  await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.deepEqual(h.decided, []);
+  assert.deepEqual(h.released, ["a"], "released, so the sweep's decision step takes it up");
 });

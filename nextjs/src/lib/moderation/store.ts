@@ -357,6 +357,9 @@ export const drizzleSweepStore: SweepStore = {
           eq(commentScores.youtubeChannelId, youtubeChannelId),
           eq(commentScores.rubricVersion, version),
           isNull(commentScores.decidedAt),
+          // Another run is taking this decision (or one that cannot be
+          // recorded is left for a person): never take it up twice.
+          isNull(commentScores.decisionClaimedAt),
           channelComments(youtubeChannelId),
           eq(youtubeComments.scoreStatus, "scored"),
           inArray(youtubeComments.moderationState, ["none", "flagged"]),
@@ -394,6 +397,40 @@ export const drizzleSweepStore: SweepStore = {
     await db
       .update(commentScores)
       .set({ decidedAt: new Date() })
+      .where(
+        and(
+          eq(commentScores.youtubeChannelId, youtubeChannelId),
+          eq(commentScores.rubricVersion, version),
+          inArray(commentScores.commentId, [...commentIds]),
+          isNull(commentScores.decidedAt)
+        )
+      );
+  },
+
+  async claimDecisions(youtubeChannelId, version, commentIds, at) {
+    if (commentIds.length === 0) return [];
+    // One UPDATE … RETURNING: of two overlapping runs, exactly one wins a row.
+    const won = await db
+      .update(commentScores)
+      .set({ decisionClaimedAt: at })
+      .where(
+        and(
+          eq(commentScores.youtubeChannelId, youtubeChannelId),
+          eq(commentScores.rubricVersion, version),
+          inArray(commentScores.commentId, [...commentIds]),
+          isNull(commentScores.decidedAt),
+          isNull(commentScores.decisionClaimedAt)
+        )
+      )
+      .returning({ commentId: commentScores.commentId });
+    return won.map((r) => r.commentId);
+  },
+
+  async releaseDecisionClaims(youtubeChannelId, version, commentIds) {
+    if (commentIds.length === 0) return;
+    await db
+      .update(commentScores)
+      .set({ decisionClaimedAt: null })
       .where(
         and(
           eq(commentScores.youtubeChannelId, youtubeChannelId),

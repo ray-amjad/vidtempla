@@ -53,3 +53,21 @@ test("R2 #1/#4 (adapter): a 401 is an auth halt, and the chokepoint store reads 
   assert.match(apply, /unauthorized: detail\.upstreamStatus === 401 \|\| isYouTubeInvalidGrantError\(err\)/, "401 -> auth");
   assert.match(apply, /async isAutomationEnabled\(youtubeChannelId\) \{ try \{ .*?return row\?\.enabled \?\? false; \} catch \(err\) \{ .*?return false; \}/, "fails closed");
 });
+
+test("R2 #5 (adapter): the claim is one conditional UPDATE, listUndecided skips claimed rows, and the state write is a compare-and-set that reports misses", () => {
+  const schema = read("src/db/schema.ts").replace(/\s+/g, " ");
+  assert.match(schema, /decisionClaimedAt: timestamp\("decision_claimed_at", \{ mode: "date", withTimezone: true \}\)/);
+  const store = read("src/lib/moderation/store.ts").replace(/\s+/g, " ");
+  assert.match(
+    store,
+    /async claimDecisions\(.*?\.set\(\{ decisionClaimedAt: at \}\).*?isNull\(commentScores\.decidedAt\), isNull\(commentScores\.decisionClaimedAt\) \) \) \.returning\(/,
+    "claim: UPDATE … WHERE unclaimed and undecided RETURNING"
+  );
+  assert.match(store, /async listUndecided\(.*?isNull\(commentScores\.decisionClaimedAt\).*?async markDecided/, "listUndecided skips claimed");
+  assert.match(store, /async releaseDecisionClaims\(.*?\.set\(\{ decisionClaimedAt: null \}\).*?isNull\(commentScores\.decidedAt\)/, "release only owed rows");
+  const apply = read("src/lib/moderation/apply.ts").replace(/\s+/g, " ");
+  assert.match(apply, /eq\(youtubeComments\.moderationState, from\) \) \) \.returning\(\{ id: youtubeComments\.id \}\)/, "compare-and-set");
+  assert.match(apply, /for \(const id of stale\) unrecorded\.add\(id\)/, "a miss is reported");
+  assert.match(apply, /could not update moderation_state", err\); for \(const id of commentIds\) unrecorded\.add\(id\)/, "a failed write is reported");
+  assert.match(apply, /return \[\.\.\.unrecorded\];/);
+});

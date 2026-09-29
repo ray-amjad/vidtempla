@@ -1,0 +1,1 @@
+ALTER TABLE "comment_scores" ADD COLUMN "decision_claimed_at" timestamp with time zone;

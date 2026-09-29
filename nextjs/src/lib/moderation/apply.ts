@@ -94,7 +94,7 @@ export async function applyModerationDecision(
   actor: ModerationActor,
   opts: ApplyModerationOptions = {}
 ): Promise<ApplyResult> {
-  const empty: ApplyResult = { outcomes: [], refused: [], halted: null, paused: [], youtubeCalls: 0 };
+  const empty: ApplyResult = { outcomes: [], refused: [], halted: null, paused: [], youtubeCalls: 0, unrecorded: [] };
   if (decisions.length === 0) return empty;
   if (actor.source === "dashboard" && !actor.userId) {
     throw new Error("applyModerationDecision: a dashboard action needs the acting userId");
@@ -400,7 +400,8 @@ const drizzleStore: ModerationStore = {
   },
 
   async recordOutcomes(channel, actor, outcomes: readonly ApplyOutcome[], at) {
-    if (outcomes.length === 0) return;
+    if (outcomes.length === 0) return [];
+    const unrecorded = new Set<string>();
     try {
       await db.insert(commentModerationActions).values(
         outcomes.map((o) => ({
@@ -420,19 +421,23 @@ const drizzleStore: ModerationStore = {
       );
     } catch (err) {
       console.error("moderation: could not write the action log", err);
+      for (const o of outcomes) unrecorded.add(o.commentId);
     }
 
-    // moderation_state follows only what YouTube confirmed.
-    const byState = new Map<RequestedAction, string[]>();
+    // moderation_state follows only what YouTube confirmed, and only from the
+    // state the decision was taken from (compare-and-set): a comment another
+    // run or a person moved meanwhile is reported, not overwritten.
+    const groups = new Map<string, { action: RequestedAction; from: ModerationState; commentIds: string[] }>();
     for (const o of outcomes) {
       if (o.status !== "applied") continue;
-      const list = byState.get(o.appliedAction) ?? [];
-      list.push(o.commentId);
-      byState.set(o.appliedAction, list);
+      const key = `${o.appliedAction}:${o.previousState}`;
+      const group = groups.get(key) ?? { action: o.appliedAction, from: o.previousState, commentIds: [] };
+      group.commentIds.push(o.commentId);
+      groups.set(key, group);
     }
-    for (const [action, commentIds] of byState) {
+    for (const { action, from, commentIds } of groups.values()) {
       try {
-        await db
+        const moved = await db
           .update(youtubeComments)
           .set({
             moderationState: STATE_AFTER[action],
@@ -445,12 +450,22 @@ const drizzleStore: ModerationStore = {
           .where(
             and(
               eq(youtubeComments.youtubeChannelId, channel.id),
-              inArray(youtubeComments.id, commentIds)
+              inArray(youtubeComments.id, commentIds),
+              eq(youtubeComments.moderationState, from)
             )
-          );
+          )
+          .returning({ id: youtubeComments.id });
+        const movedIds = new Set(moved.map((r) => r.id));
+        const stale = commentIds.filter((id) => !movedIds.has(id));
+        if (stale.length > 0) {
+          console.error(`moderation: moderation_state moved before ${action} was recorded (${stale.length} comments)`);
+          for (const id of stale) unrecorded.add(id);
+        }
       } catch (err) {
         console.error("moderation: could not update moderation_state", err);
+        for (const id of commentIds) unrecorded.add(id);
       }
     }
+    return [...unrecorded];
   },
 };

@@ -45,6 +45,7 @@ import type {
   RuleValidationResult,
   TextSource,
   ApplyPort,
+  Clock,
   DryRunDeps,
   DryRunResult,
   JevCallResult,
@@ -626,6 +627,9 @@ type YouTubeOp = "hold" | "reject" | "ban" | "release" | "delete";
  *    as in services/comments.ts); cap slots come back for capped actions that
  *    provably never reached YouTube; the action log and moderation_state are
  *    written per call, so a killed process loses at most one call's log rows.
+ *    The state moves only from the state the decision was taken from
+ *    (compare-and-set); whatever the store could not record is returned in
+ *    `unrecorded`, so an automatic caller does not mark it decided.
  */
 export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promise<ApplyResult> {
   const { channel, actor } = input;
@@ -640,6 +644,7 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
     halted: null,
     paused: [],
     youtubeCalls: 0,
+    unrecorded: [],
   };
 
   const organizationId = channel.organizationId;
@@ -697,16 +702,22 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
     // Nothing landed (every attempt, if any, was a 4xx) and the reason was a
     // halt, not the comment: the automatic caller may decide it again later.
     retryable: it.status === "failed" && it.allDefinitive && it.error !== null && RETRYABLE_ERRORS.has(it.error),
+    previousState: it.d.comment.moderationState,
   });
 
-  /** Hands finished items to the store (action log + moderation_state). */
+  /**
+   * Hands finished items to the store (action log + moderation_state, the
+   * state only where it still equals previousState). What the store could not
+   * record is reported in `result.unrecorded`, never swallowed.
+   */
   const record = async (batch: WorkItem[]) => {
     const done = batch.filter((it) => !it.settled);
     if (done.length === 0) return;
     for (const it of done) it.settled = true;
     const outcomes = done.map(outcomeOf);
     result.outcomes.push(...outcomes);
-    await deps.store.recordOutcomes(channel, actor, outcomes, deps.clock.now());
+    const unrecorded = await deps.store.recordOutcomes(channel, actor, outcomes, deps.clock.now());
+    result.unrecorded.push(...unrecorded);
   };
 
   // ── 2b. Automation switched off (automatic only) ──
@@ -1288,6 +1299,8 @@ interface MatchesApplied {
    * stamped decided, so the next sweep takes them up (`sweepDecideBacklog`).
    */
   owed: Set<string>;
+  /** Comment ids whose outcome the store could not record (ApplyResult.unrecorded). */
+  unrecorded: Set<string>;
 }
 
 /** Hands matches to the chokepoint; maps its halt onto a stopping rule. */
@@ -1297,7 +1310,7 @@ async function applyMatches(
   decisions: SweepDecision[],
   deadlineMs: number
 ): Promise<MatchesApplied> {
-  if (decisions.length === 0) return { applied: 0, halt: null, owed: new Set() };
+  if (decisions.length === 0) return { applied: 0, halt: null, owed: new Set(), unrecorded: new Set() };
   let result: ApplyResult;
   try {
     result = await apply.apply(channel, decisions, { deadlineMs });
@@ -1305,28 +1318,76 @@ async function applyMatches(
     // Nothing is known to have started, so every decision stays owed. A retry
     // is safe for I4: the chokepoint re-reads moderation_state, and
     // listUndecided skips a comment with an applied or unknown log row.
-    return { applied: 0, halt: null, owed: new Set(decisions.map((d) => d.commentId)) };
+    return { applied: 0, halt: null, owed: new Set(decisions.map((d) => d.commentId)), unrecorded: new Set() };
   }
   // Everything else is settled: refused (final), applied, refused by YouTube,
   // or possibly landed — an attempted write is never redone.
   const owed = new Set(result.outcomes.filter((o) => o.retryable).map((o) => o.commentId));
   const applied = result.outcomes.filter((o) => o.status === "applied").length;
-  return { applied, halt: result.halted ? RUN_HALT[result.halted] : null, owed };
+  const unrecorded = new Set(result.unrecorded);
+  return { applied, halt: result.halted ? RUN_HALT[result.halted] : null, owed, unrecorded };
 }
 
 /**
  * Stamps `decided_at` on the scores whose decision is taken: every evaluated
- * comment except those whose decision is still owed (see MatchesApplied).
+ * comment except `notDecided` (see takeDecisions).
  */
 async function markSettled(
   store: Pick<SweepStore, "markDecided">,
   channel: ChannelRef,
   version: number,
   evaluated: readonly UndecidedScore[],
-  owed: ReadonlySet<string>
+  notDecided: ReadonlySet<string>
 ): Promise<void> {
-  const ids = evaluated.map((e) => e.comment.id).filter((id) => !owed.has(id));
+  const ids = evaluated.map((e) => e.comment.id).filter((id) => !notDecided.has(id));
   if (ids.length > 0) await store.markDecided(channel.id, ids, version);
+}
+
+/**
+ * Takes one step's decisions to the chokepoint so that overlapping runs (two
+ * sweeps, a sweep and a reclassify) act on a score at most once.
+ *
+ * 1. **Claim** the owed score rows of the decisions, atomically. A row another
+ *    run holds or has decided is lost: this run neither applies nor stamps it.
+ *    A claim that throws wins nothing.
+ * 2. **Apply** only the claimed decisions.
+ * 3. **Stamp** decided every evaluated score except: lost claims, decisions
+ *    still owed, and outcomes the store could not record.
+ * 4. **Release** the claims of owed decisions (nothing reached YouTube), so the
+ *    next sweep's decision step takes them up.
+ *
+ * An unrecorded outcome keeps its claim and stays undecided: it may have
+ * reached YouTube, so no run takes it up again (I4).
+ */
+async function takeDecisions(
+  deps: {
+    clock: Clock;
+    apply: ApplyPort;
+    store: Pick<SweepStore, "claimDecisions" | "releaseDecisionClaims" | "markDecided">;
+  },
+  channel: ChannelRef,
+  version: number,
+  evaluated: readonly UndecidedScore[],
+  decisions: readonly SweepDecision[],
+  deadlineMs: number
+): Promise<{ applied: number; halt: RunHalt | null }> {
+  const wanted = [...new Set(decisions.map((d) => d.commentId))];
+  let claimed = new Set<string>();
+  if (wanted.length > 0) {
+    try {
+      claimed = new Set(await deps.store.claimDecisions(channel.id, version, wanted, deps.clock.now()));
+    } catch {
+      // Nothing is claimed: nothing is applied, and the decisions stay owed.
+    }
+  }
+  const lost = wanted.filter((id) => !claimed.has(id));
+
+  const mine = decisions.filter((d) => claimed.has(d.commentId));
+  const taken = await applyMatches(deps.apply, channel, mine, deadlineMs);
+
+  await markSettled(deps.store, channel, version, evaluated, new Set([...lost, ...taken.owed, ...taken.unrecorded]));
+  if (taken.owed.size > 0) await deps.store.releaseDecisionClaims(channel.id, version, [...taken.owed]);
+  return { applied: taken.applied, halt: taken.halt };
 }
 
 /** A credit or quota stop drops the window: the cursor jumps to `at` and any listing resume is forgotten. */
@@ -1524,9 +1585,8 @@ export async function sweepDecideBacklog(deps: SweepDeps, channel: ChannelRef): 
   const rules = await deps.store.getRules(channel.id);
   const { decisions } = decide(rules, owed, rubric.version);
   counts.decisions = decisions.length;
-  const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
+  const applied = await takeDecisions(deps, channel, rubric.version, owed, decisions, stepStartMs + t.stepBudgetMs);
   counts.applied = applied.applied;
-  await markSettled(deps.store, channel, rubric.version, owed, applied.owed);
 
   // A balance too small for a 50-credit action may still pay for 1-credit
   // scores: the owed decisions wait, and the scoring steps apply the usual
@@ -1595,9 +1655,8 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
   const evaluated = toEvaluated(batch.scored);
   const { decisions } = decide(rules, evaluated, rubric.version);
   counts.decisions = decisions.length;
-  const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
+  const applied = await takeDecisions(deps, channel, rubric.version, evaluated, decisions, stepStartMs + t.stepBudgetMs);
   counts.applied = applied.applied;
-  await markSettled(deps.store, channel, rubric.version, evaluated, applied.owed);
 
   if (batch.stop === "credits") return endOnHalt(end, "credits");
   if (applied.halt) return endOnHalt(end, applied.halt);
@@ -1719,11 +1778,10 @@ export async function reclassifyChunk(
   const evaluated = toEvaluated(batch.scored);
   const { decisions, maybeRelease } = decide(rules, evaluated, version);
   counts.decisions = decisions.length;
-  const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
-  counts.applied = applied.applied;
   // A decision that never started stays owed; the sweep's decision step
   // takes it up while this version is the published one.
-  await markSettled(deps.store, channel, version, evaluated, applied.owed);
+  const applied = await takeDecisions(deps, channel, version, evaluated, decisions, stepStartMs + t.stepBudgetMs);
+  counts.applied = applied.applied;
 
   if (batch.stop === "credits" || applied.halt === "credits") {
     return result("out of credits", null, nextAfterId, maybeRelease);

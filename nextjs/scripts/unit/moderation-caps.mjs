@@ -138,6 +138,7 @@ function harness(opts = {}) {
       async recordOutcomes(channel, actor, outcomes) {
         recorded.push(...outcomes.map((o) => ({ ...o, actor })));
         events.push({ type: "record", n: outcomes.length });
+        return outcomes.filter((o) => opts.unrecorded?.(o)).map((o) => o.commentId);
       },
     },
     classifyError(err) {
@@ -597,4 +598,11 @@ test("R2 #1: a halt marks the decisions it stopped as retryable; an attempt that
   assert.equal(by["c-2"].error, "rateLimit");
   assert.equal(by["c-2"].retryable, true, "a definitive 429: nothing landed, take it up later");
   assert.equal(by["c-3"].retryable, true, "never sent");
+});
+
+test("R2 #5: an outcome the store could not record (log or state compare-and-set) is reported as unrecorded", async () => {
+  const h = harness({ unrecorded: (o) => o.commentId === "c-2" });
+  const r = await run(h, AUTO, decisions("hold", 1, 3));
+  assert.deepEqual(r.unrecorded, ["c-2"]);
+  assert.ok(r.outcomes.every((o) => o.previousState === "none"), "each outcome carries the state it decided from");
 });

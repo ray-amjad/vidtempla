@@ -253,7 +253,7 @@ function harness(opts = {}) {
     async listUndecided(_ch, version, limit) {
       const out = [];
       for (const sc of scores) {
-        if (sc.rubricVersion !== version || sc.decidedAt) continue;
+        if (sc.rubricVersion !== version || sc.decidedAt || sc.claimedAt) continue;
         const r = comments.get(sc.commentId);
         if (!r || r.scoreStatus !== "scored" || !["none", "flagged"].includes(r.moderationState)) continue;
         // "We may have acted": an applied or unknown action-log row excludes it.
@@ -265,6 +265,23 @@ function harness(opts = {}) {
     async markDecided(_ch, ids, version) {
       for (const sc of scores) {
         if (sc.rubricVersion === version && ids.includes(sc.commentId)) sc.decidedAt ??= new Date(nowMs);
+      }
+    },
+    // Like UPDATE … WHERE decided_at IS NULL AND decision_claimed_at IS NULL RETURNING.
+    // `claimLost(commentId)` true: another run holds the row.
+    async claimDecisions(_ch, version, ids, at) {
+      const won = [];
+      for (const sc of scores) {
+        if (sc.rubricVersion !== version || !ids.includes(sc.commentId)) continue;
+        if (sc.decidedAt || sc.claimedAt || opts.claimLost?.(sc.commentId)) continue;
+        sc.claimedAt = at;
+        won.push(sc.commentId);
+      }
+      return won;
+    },
+    async releaseDecisionClaims(_ch, version, ids) {
+      for (const sc of scores) {
+        if (sc.rubricVersion === version && ids.includes(sc.commentId) && !sc.decidedAt) sc.claimedAt = undefined;
       }
     },
     async listForDryRun(_ch, limit) {
@@ -347,10 +364,16 @@ function harness(opts = {}) {
       async settleSnapshot() {},
       async recordOutcomes(_ch, _actor, outcomes) {
         const STATE = { flag: "flagged", hold: "held", reject: "rejected", ban: "banned", delete: "deleted" };
+        const unrecorded = [];
         for (const o of outcomes) {
           actionLog.push(o);
-          if (o.status === "applied") comments.get(o.commentId).moderationState = STATE[o.appliedAction];
+          if (o.status !== "applied") continue;
+          const row = comments.get(o.commentId);
+          // Compare-and-set on the state the chokepoint decided from.
+          if (o.previousState !== undefined && row.moderationState !== o.previousState) unrecorded.push(o.commentId);
+          else row.moderationState = STATE[o.appliedAction];
         }
+        return unrecorded;
       },
     },
     classifyError: opts.classifyError ?? (() => ({ definitive: false, halt: null })),
@@ -1296,4 +1319,49 @@ test("R2 #4: disabled while a chunk scores: the chokepoint acts on nothing and t
   assert.deepEqual(charges(h), [SCORE_CREDITS], "no action charge");
   assert.equal(h.byText(spam).moderationState, "none");
   assert.equal(h.scores[0].decidedAt, undefined, "owed, not stamped decided");
+});
+
+test("R2 #5: two overlapping decision steps act on an owed decision once", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({ pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]], tuning: { stepBudgetMs: 10_000 } });
+  await sweepChannel(h.deps, CHANNEL);
+  h.deps.tuning = {};
+  assert.equal(h.scores[0].decidedAt, undefined, "owed after the time-budget stop");
+  assert.equal(h.scores[0].claimedAt, undefined, "the time-budget stop released its claim");
+  await Promise.all([sweepDecideBacklog(h.deps, CHANNEL), sweepDecideBacklog(h.deps, CHANNEL)]);
+  assert.equal(h.ytWrites.filter((w) => w.fn === "deleteComment").length, 1, "one YouTube delete");
+  assert.equal(h.actionLog.filter((a) => a.status === "applied").length, 1, "one applied log row");
+  assert.equal(charges(h).filter((a) => a === 50).length, 1, "one action charge");
+  assert.ok(h.scores[0].decidedAt, "stamped decided once acted on");
+  assert.equal(h.byText(spam).moderationState, "deleted");
+});
+
+test("R2 #5: a decision another run has claimed is neither applied nor stamped decided", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({ pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 31 })]], claimLost: () => true });
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.ytWrites.length, 0);
+  assert.deepEqual(charges(h), [1], "only the score is charged");
+  assert.equal(h.scores[0].decidedAt, undefined, "the holder of the claim stamps it, not this run");
+});
+
+test("R2 #5: a state write that loses the compare-and-set is not stamped decided and keeps its claim", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  let h;
+  h = harness({
+    pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 31 })]],
+    // A person holds the comment while the automatic delete is in flight.
+    ytDeleteError: () => {
+      h.byText(spam).moderationState = "held";
+      return null;
+    },
+  });
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.actionLog[0].previousState, "none", "the outcome carries the state it decided from");
+  assert.equal(h.byText(spam).moderationState, "held", "the stale write did not land");
+  assert.equal(h.scores[0].decidedAt, undefined, "not stamped decided");
+  assert.ok(h.scores[0].claimedAt, "still claimed: no later run takes it up");
+  h.setPages([[]]);
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.ytWrites.filter((w) => w.fn === "deleteComment").length, 1, "never redone");
 });

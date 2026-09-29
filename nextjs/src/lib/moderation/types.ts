@@ -305,6 +305,11 @@ export interface ApplyOutcome {
    * again. False for anything applied, refused by YouTube, or possibly landed.
    */
   retryable: boolean;
+  /**
+   * youtube_comments.moderation_state the decision was taken from. The store
+   * moves the state only while it still equals this (compare-and-set).
+   */
+  previousState: ModerationState;
 }
 
 export interface ApplyRefusal {
@@ -321,6 +326,13 @@ export interface ApplyResult {
   paused: CapClass[];
   /** YouTube write calls made (one per batch or single delete). */
   youtubeCalls: number;
+  /**
+   * Comment ids whose outcome the store could not record: the action-log row
+   * or the moderation_state write failed, or the state had moved since the
+   * decision (compare-and-set matched no row). An automatic caller must not
+   * mark these decided.
+   */
+  unrecorded: string[];
 }
 
 export interface ApplyInput {
@@ -533,11 +545,19 @@ export interface SweepStore {
    * Scores of `version` still owed a decision (`decided_at` null) on scored
    * comments in state none or flagged, oldest first. A comment with an
    * `applied` or `unknown` action-log row is left out: something may already
-   * have reached YouTube for it (I4).
+   * have reached YouTube for it (I4). So is a score another run has claimed.
    */
   listUndecided(youtubeChannelId: string, version: number, limit: number): Promise<UndecidedScore[]>;
   /** Stamps `decided_at` on these comments' `version` scores (first time only). */
   markDecided(youtubeChannelId: string, commentIds: readonly string[], version: number): Promise<void>;
+  /**
+   * Atomically claims the owed (`decided_at` null), unclaimed `version`
+   * scores of these comments for this run; returns the comment ids it won.
+   * Only a claimed decision goes to the chokepoint, so overlapping runs act once.
+   */
+  claimDecisions(youtubeChannelId: string, version: number, commentIds: readonly string[], at: Date): Promise<string[]>;
+  /** Clears the claim on these still-owed `version` scores, so a later run takes them up. */
+  releaseDecisionClaims(youtubeChannelId: string, version: number, commentIds: readonly string[]): Promise<void>;
   /** The most recent stored, scored, not-deleted comments, for a dry run. */
   listForDryRun(youtubeChannelId: string, limit: number): Promise<ScoringComment[]>;
   setRunStatus(youtubeChannelId: string, status: SweepStatus, at: Date): Promise<void>;
@@ -608,7 +628,17 @@ export type ReclassifyDeps = ScoringDeps & {
   creditBalance(organizationId: string): Promise<number | null>;
   quota: QuotaBreaker;
   apply: ApplyPort;
-  store: Pick<SweepStore, "getAutomation" | "getPublishedRubric" | "getRules" | "listForReclassify" | "saveScore" | "markDecided">;
+  store: Pick<
+    SweepStore,
+    | "getAutomation"
+    | "getPublishedRubric"
+    | "getRules"
+    | "listForReclassify"
+    | "saveScore"
+    | "markDecided"
+    | "claimDecisions"
+    | "releaseDecisionClaims"
+  >;
 };
 
 export type DryRunDeps = ScoringDeps & {
@@ -741,12 +771,14 @@ export interface ModerationStore {
   /**
    * Appends action-log rows and, for `applied` outcomes, moves
    * youtube_comments.moderation_state (and actioned_at on the first
-   * hold/reject/ban/delete). Never throws.
+   * hold/reject/ban/delete) where it still equals `previousState`. Never
+   * throws: returns the comment ids it could not record (log or state write
+   * failed, or the compare-and-set matched no row).
    */
   recordOutcomes(
     channel: ChannelRef,
     actor: ModerationActor,
     outcomes: readonly ApplyOutcome[],
     at: Date
-  ): Promise<void>;
+  ): Promise<string[]>;
 }

@@ -831,6 +831,12 @@ export const commentScores = pgTable(
     // attempted by the chokepoint). Null = still owed a decision: the next
     // sweep re-evaluates it if this is the published version.
     decidedAt: timestamp("decided_at", { mode: "date", withTimezone: true }),
+    // Set atomically by the run that takes this score's decision to the
+    // chokepoint, so two overlapping runs never act on it twice. Cleared when
+    // the decision stays owed (nothing reached YouTube). A claim left by a
+    // killed step, or by an outcome that could not be recorded, is never
+    // re-taken: the comment waits for a person rather than risk acting twice.
+    decisionClaimedAt: timestamp("decision_claimed_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .notNull()
       .defaultNow(),
