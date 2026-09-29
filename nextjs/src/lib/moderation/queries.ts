@@ -24,7 +24,7 @@ import type { ServiceResult } from "@/lib/services/types";
 import {
   DAILY_DELETE_CAP,
   DAILY_REJECT_BAN_CAP,
-  evaluateRules,
+  isMaybeRelease,
   pacificDayKey,
 } from "./core";
 import { drizzleSweepStore, parseRubricLabels } from "./store";
@@ -315,8 +315,9 @@ export async function listReviewQueue(
 }
 
 /**
- * Held comments whose published-version score matches no rule any more
- * (typically after a reclassify). Never acted on automatically (I4); a
+ * Held comments whose published-version score no longer earns a hold or
+ * stronger: no rule matches, or only a flag rule wins (core `isMaybeRelease`),
+ * typically after a reclassify. Never acted on automatically (I4); a
  * person may release them. Computed on read, capped at `limit` (≤ 100).
  */
 export async function listMaybeRelease(
@@ -339,7 +340,7 @@ export async function listMaybeRelease(
     });
     if ("error" in res) return res;
     for (const c of res.data.items) {
-      if (c.score && !evaluateRules(rules, c.score.probabilities)) items.push(c);
+      if (c.score && isMaybeRelease("held", rules, c.score.probabilities)) items.push(c);
       if (items.length >= limit) break;
     }
     if (!res.data.hasMore || !res.data.cursor) break;

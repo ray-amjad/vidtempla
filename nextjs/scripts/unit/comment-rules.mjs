@@ -13,6 +13,7 @@ const {
   validateRules,
   pacificDayKey,
   reclassifyChunk,
+  isMaybeRelease,
 } = await import("../../src/lib/moderation/core.ts");
 
 // ─── spam-comments.txt at the repo root: entries separated by a `---` line ──
@@ -389,4 +390,42 @@ test("reclassify ends `out of credits` and `quota breaker` without acting", asyn
   assert.equal((await reclassifyChunk(tripped.deps, RC_CHANNEL, 2, null)).status, "quota breaker");
   assert.equal(tripped.jevCalls.length, 0);
   assert.equal(tripped.applyCalls.length, 0);
+});
+
+// ─── Review round 1 #5: maybe release ────────────────────────────────────────
+
+test("R1 #5: isMaybeRelease — held and no hold-or-stronger rule wins (null or flag)", () => {
+  const rules = [
+    { id: "r-flag", label: "normal", threshold: 0.5, action: "flag" },
+    { id: "r-hold", label: "spam", threshold: 0.7, action: "hold" },
+    { id: "r-del", label: "spam", threshold: 0.9, action: "delete" },
+  ];
+  // No rule matches → maybe release.
+  assert.equal(isMaybeRelease("held", rules, { spam: 0.2, normal: 0.4 }), true);
+  // Only a flag rule wins → maybe release (a flag is not a hold).
+  assert.equal(isMaybeRelease("held", rules, { spam: 0.2, normal: 0.8 }), true);
+  // Hold or stronger still wins → stays held.
+  assert.equal(isMaybeRelease("held", rules, { spam: 0.75, normal: 0.2 }), false);
+  assert.equal(isMaybeRelease("held", rules, { spam: 0.95, normal: 0.9 }), false);
+  // No rules at all → maybe release.
+  assert.equal(isMaybeRelease("held", [], { spam: 0.99 }), true);
+  // Only held comments belong there.
+  for (const state of ["none", "flagged", "rejected", "banned", "deleted", "released"]) {
+    assert.equal(isMaybeRelease(state, rules, { spam: 0.2, normal: 0.4 }), false, state);
+  }
+});
+
+test("R1 #5: reclassify lists a held comment whose only match is a flag rule as maybe release", async () => {
+  const rows = [rcRow("a-held-flag", "held"), rcRow("b-held-hold", "held")];
+  const h = reclassifyHarness({
+    rows,
+    v2: { "a-held-flag": { spam: 0.2, normal: 0.8 }, "b-held-hold": { spam: 0.75, normal: 0.2 } },
+    rules: [
+      { id: "r-flag", label: "normal", threshold: 0.5, action: "flag" },
+      { id: "r-hold", label: "spam", threshold: 0.7, action: "hold" },
+    ],
+  });
+  const res = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.deepEqual(res.maybeRelease, ["a-held-flag"]);
+  assert.equal(h.applyCalls.flat().length, 0, "I4: held comments get no decision");
 });

@@ -179,6 +179,21 @@ export function evaluateRules(
   };
 }
 
+/**
+ * "Maybe release" (I4, Goal 4): a held comment whose current score no longer
+ * earns a hold or anything stronger — no rule matches, or only a flag rule
+ * wins. Never acted on automatically; a person may release it.
+ */
+export function isMaybeRelease(
+  state: ModerationState,
+  rules: readonly ModerationRule[],
+  probabilities: LabelProbabilities
+): boolean {
+  if (state !== "held") return false;
+  const action = evaluateRules(rules, probabilities).action;
+  return action === null || action === "flag";
+}
+
 function isModerationAction(v: unknown): v is ModerationAction {
   return typeof v === "string" && (MODERATION_ACTIONS as readonly string[]).includes(v);
 }
@@ -830,8 +845,11 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
       }
       const charge = await deps.credits.charge(organizationId, MODERATION_WRITE_CREDITS);
       if (charge.outcome !== "ok") {
-        halt("credits");
-        fail(it, "credits");
+        // A ledger error is not an empty balance: it halts as `ledger`, so the
+        // sweep keeps its window instead of dropping it as out of credits.
+        const reason: ApplyHaltReason = charge.outcome === "error" ? "ledger" : "credits";
+        halt(reason);
+        fail(it, reason);
         continue;
       }
       it.charge = charge;
@@ -1013,7 +1031,8 @@ interface ScoreBatch {
   /** Net credits actually deducted for the scores that stand. */
   creditsCharged: number;
   model: string | null;
-  stop: "credits" | "time" | "jev" | null;
+  /** `ledger`: the credit ledger errored (not an empty balance); nothing was charged. */
+  stop: "credits" | "ledger" | "time" | "jev" | null;
 }
 
 /**
@@ -1057,7 +1076,7 @@ async function scoreBatch(
 
       const charge = await deps.credits.charge(organizationId, SCORE_CREDITS);
       if (charge.outcome !== "ok") {
-        stop = stop ?? "credits";
+        stop = stop ?? (charge.outcome === "error" ? "ledger" : "credits");
         continue;
       }
       let res: JevCallResult;
@@ -1134,7 +1153,7 @@ function decide(
   const maybeRelease: string[] = [];
   for (const { comment, result } of scored) {
     const evaluation = evaluateRules(rules, result.probabilities);
-    if (comment.moderationState === "held" && evaluation.action === null) {
+    if (isMaybeRelease(comment.moderationState, rules, result.probabilities)) {
       maybeRelease.push(comment.id);
       continue;
     }
@@ -1169,7 +1188,7 @@ async function applyMatches(
   channel: ChannelRef,
   decisions: SweepDecision[],
   deadlineMs: number
-): Promise<{ applied: number; halt: "credits" | "quota" | null }> {
+): Promise<{ applied: number; halt: "credits" | "ledger" | "quota" | null }> {
   if (decisions.length === 0) return { applied: 0, halt: null };
   let result: ApplyResult;
   try {
@@ -1182,7 +1201,9 @@ async function applyMatches(
   const halt =
     result.halted === "credits"
       ? "credits"
-      : result.halted === "quota" || result.halted === "quotaBreaker"
+      : result.halted === "ledger"
+        ? "ledger"
+        : result.halted === "quota" || result.halted === "quotaBreaker"
         ? "quota"
         : null;
   return { applied, halt };
@@ -1338,6 +1359,9 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
     return end("skipped: out of credits", "insufficient_credits", true);
   }
   if (applied.halt === "quota") return end("skipped: quota breaker", "quota", true);
+  // The credit ledger failed (a DB error, not an empty balance): stop, keep
+  // the window. Unstarted claims went back to pending above.
+  if (batch.stop === "ledger" || applied.halt === "ledger") return end("done", "credit_ledger_error", false);
   // Jev is unusable (no key / bad key): stop calling it; the comments wait, pending.
   if (batch.stop === "jev") return end("done", "jev_unavailable", false);
   return { status: "continue", reason: null, ...counts };
@@ -1445,6 +1469,9 @@ export async function reclassifyChunk(
     return result("out of credits", null, nextAfterId, maybeRelease);
   }
   if (applied.halt === "quota") return result("quota breaker", null, nextAfterId, maybeRelease);
+  if (batch.stop === "ledger" || applied.halt === "ledger") {
+    return result("done", "credit_ledger_error", nextAfterId, maybeRelease);
+  }
   if (batch.stop === "jev") return result("done", "jev_unavailable", nextAfterId, maybeRelease);
   return result("continue", null, nextAfterId, maybeRelease);
 }
@@ -1504,7 +1531,9 @@ export async function dryRun(
     stoppedReason:
       batch.stop === "credits"
         ? "out of credits"
-        : batch.stop === "time"
+        : batch.stop === "ledger"
+          ? "credit ledger error"
+          : batch.stop === "time"
           ? "time budget"
           : batch.stop === "jev"
             ? "jev unavailable"

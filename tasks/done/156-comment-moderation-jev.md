@@ -215,3 +215,13 @@ Open for the PR body: the spec corrections from Ray's answers 1, 2 and 4
 (org-less REST key is 401, I1 covers this feature only, examples go in Jev
 `state`); the cron sweep's charges are not in `apiRequestLog` (phase 4 open
 item); Jev pacing is per step, not global (phase 3 tradeoff).
+
+## Review round 1 fixes
+
+Fail-first counts: the new tests were added and run against the unfixed
+code first, then the fix went in and the whole suite ran green.
+
+| Finding | New tests | Failed before the fix | Pass after |
+| --- | --- | --- | --- |
+| #1 ledger error read as out of credits | 3 in `scripts/unit/comment-sweep.mjs` (`R1 #1 …`) | 3 / 3 | 3 / 3 |
+| #5 "maybe release" always empty | 2 in `scripts/unit/comment-rules.mjs` (`R1 #5 …`) | 2 / 2 | 2 / 2 |

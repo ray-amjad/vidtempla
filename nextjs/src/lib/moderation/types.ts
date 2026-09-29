@@ -259,7 +259,9 @@ export type DegradedReason =
  * - `quotaBreaker`: the breaker was already tripped (automatic actor only).
  * - `rateLimit`: a transient throttle.
  * - `auth`: the channel token could not be resolved.
- * - `credits`: the org's balance (or the ledger) refused a charge.
+ * - `credits`: the org's balance refused a charge (insufficient credits).
+ * - `ledger`: the credit ledger itself failed (a database error). Not "out
+ *   of credits": callers keep their window and try again later.
  * - `timeBudget`: the next call could not finish inside the deadline.
  */
 export type ApplyHaltReason =
@@ -268,6 +270,7 @@ export type ApplyHaltReason =
   | "rateLimit"
   | "auth"
   | "credits"
+  | "ledger"
   | "timeBudget";
 
 export interface ApplyOutcome {
@@ -633,7 +636,7 @@ export interface DryRunResult {
   unscored: number;
   creditsCharged: number;
   /** Why the run stopped early, or null when every sampled comment was tried. */
-  stoppedReason: "out of credits" | "time budget" | "jev unavailable" | null;
+  stoppedReason: "out of credits" | "credit ledger error" | "time budget" | "jev unavailable" | null;
   perRule: DryRunRuleCount[];
   /** After I3 collapse: how many comments each action would win. */
   byAction: Record<ModerationAction, number>;

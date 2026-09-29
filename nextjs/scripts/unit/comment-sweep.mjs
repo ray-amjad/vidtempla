@@ -117,6 +117,11 @@ function harness(opts = {}) {
   };
   const credits = {
     async charge(org, amount) {
+      // `ledgerError(amount)` true: the ledger threw (a DB error), nothing deducted.
+      if (opts.ledgerError?.(amount)) {
+        events.push({ type: "ledgerError", amount });
+        return { outcome: "error", refundable: 0 };
+      }
       if (balance < amount) return { outcome: "insufficient", refundable: 0 };
       balance -= amount;
       events.push({ type: "charge", amount });
@@ -870,4 +875,66 @@ test("dry run stops at an empty balance and says so", async () => {
   assert.equal(res.stoppedReason, "out of credits");
   assert.equal(res.scored, 1);
   assert.deepEqual(charges(h), [1]);
+});
+
+// ─── Review round 1 ──────────────────────────────────────────────────────────
+
+test("R1 #1: a credit-ledger error while scoring is not 'out of credits': window kept, comments stay pending", async () => {
+  const h = harness({
+    ledgerError: (amount) => amount === SCORE_CREDITS,
+    pages: [
+      [
+        thread({ id: "yt-a", text: "first", minutesAfter: 31 }),
+        thread({ id: "yt-b", text: "second", minutesAfter: 32 }),
+      ],
+    ],
+  });
+  const out = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(out.status, "done");
+  assert.equal(out.reason, "credit_ledger_error");
+  assert.equal(h.jevRequests.length, 0, "no Jev call without a charge");
+  assert.equal(h.byText("first").scoreStatus, "pending", "not dropped to unscored");
+  assert.equal(h.byText("second").scoreStatus, "pending");
+  assert.equal(
+    h.automation.cursor.toISOString(),
+    new Date(ENABLED_AT.getTime() + 32 * 60_000).toISOString(),
+    "the cursor stays at the newest ingested comment, not now"
+  );
+  assert.deepEqual(h.runStatuses.map((s) => s.status), ["done"]);
+});
+
+test("R1 #1: a credit-ledger error on an action charge is not 'out of credits' either", async () => {
+  const h = harness({
+    ledgerError: (amount) => amount === MODERATION_WRITE_CREDITS,
+    tuning: { chunkSize: 1 },
+    pages: [
+      [
+        thread({ id: "yt-spam", text: "Read AI Millionaire FastScale by Mark Voss", minutesAfter: 31 }),
+        thread({ id: "yt-b", text: "second", minutesAfter: 32 }),
+        thread({ id: "yt-c", text: "third", minutesAfter: 33 }),
+      ],
+    ],
+  });
+  const out = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(out.status, "done");
+  assert.equal(out.reason, "credit_ledger_error");
+  assert.equal(h.ytWrites.length, 0, "nothing reached YouTube without a charge");
+  assert.equal(h.byText("Read AI Millionaire FastScale by Mark Voss").moderationState, "none");
+  assert.equal(h.byText("second").scoreStatus, "pending", "the rest of the window is kept");
+  assert.equal(h.byText("third").scoreStatus, "pending");
+  assert.ok(h.automation.cursor.getTime() < START.getTime(), "cursor not moved to now");
+});
+
+test("R1 #1: applyDecisions halts `ledger`, not `credits`, when the ledger errors", async () => {
+  const h = harness({ ledgerError: () => true });
+  await h.deps.store.insertComments(CHANNEL.id, [
+    { commentId: "a", parentId: null, videoId: "v", authorChannelId: "UCa", authorDisplayName: "", text: "x", textSource: "display", publishedAt: new Date() },
+  ]);
+  const res = await h.deps.apply.apply(CHANNEL, [{ commentId: "row-1", action: "hold", ruleId: null, rubricVersion: 1 }], {
+    deadlineMs: START.getTime() + 50_000,
+  });
+  assert.equal(res.halted, "ledger");
+  assert.equal(res.outcomes[0].status, "failed");
+  assert.equal(res.outcomes[0].error, "ledger");
+  assert.equal(h.ytWrites.length, 0);
 });

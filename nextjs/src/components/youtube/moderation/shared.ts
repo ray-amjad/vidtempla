@@ -96,6 +96,7 @@ export const HALT_LABELS: Record<string, string> = {
   rateLimit: 'YouTube throttled the request. Try again in about a minute.',
   auth: 'The channel token could not be read. Reconnect the channel.',
   credits: 'This workspace ran out of credits.',
+  ledger: 'Credits could not be checked (a temporary error). Nothing more was charged; try again in a moment.',
   timeBudget: 'The request ran out of time. Send the rest again.',
 };
 
