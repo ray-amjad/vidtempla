@@ -471,6 +471,16 @@ export const MODERATION_BATCH_MAX = 50;
 /** Default ceiling of one YouTube call (clients/youtube.ts YOUTUBE_CALL_TIMEOUT_MS). */
 const DEFAULT_CALL_TIMEOUT_MS = 15_000;
 
+/**
+ * A charge the ledger reported as paid without deducting anything:
+ * `consumeCredits` fails open on a database error (services/comments.ts), so
+ * `refundable` falls short of what was asked. The manual comment tools accept
+ * that; automatic work treats it as a ledger error and stops.
+ */
+export function isUnmetered(charge: CreditCharge, amount: number): boolean {
+  return charge.outcome === "ok" && charge.refundable < amount;
+}
+
 /** The capped class of an action, or null (hold, flag and release are uncapped). */
 function capClassOf(action: RequestedAction): CapClass | null {
   if (action === "reject" || action === "ban") return "rejectBan";
@@ -570,7 +580,8 @@ type YouTubeOp = "hold" | "reject" | "ban" | "release" | "delete";
  *    hold and release in batches of ≤ 50 ids. Per call: time-budget check,
  *    then a `pending` comment_edits snapshot of the stored text for every
  *    reject/ban/delete (I6: source `auto` + null userId when automatic), then
- *    50 credits per comment, then the call. A failed reject/ban batch retries
+ *    50 credits per comment (for the automatic actor a charge the ledger
+ *    did not really deduct halts as `ledger`), then the call. A failed reject/ban batch retries
  *    each of its comments individually as HOLD — never as something stronger.
  *    A daily-quota error trips the breaker; it, a rate limit, an auth failure,
  *    a credit refusal or the time budget halt everything not yet sent.
@@ -850,10 +861,14 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
         continue;
       }
       const charge = await deps.credits.charge(organizationId, MODERATION_WRITE_CREDITS);
-      if (charge.outcome !== "ok") {
-        // A ledger error is not an empty balance: it halts as `ledger`, so the
-        // sweep keeps its window instead of dropping it as out of credits.
-        const reason: ApplyHaltReason = charge.outcome === "error" ? "ledger" : "credits";
+      const unmetered = automatic && isUnmetered(charge, MODERATION_WRITE_CREDITS);
+      if (charge.outcome !== "ok" || unmetered) {
+        // An empty balance halts as `credits`. A ledger that threw — or, for
+        // the automatic actor, one that failed open and deducted nothing —
+        // halts as `ledger`: the sweep keeps its window, and no automatic
+        // write runs unmetered. A person's action keeps the fail-open
+        // behaviour of the existing comment tools.
+        const reason: ApplyHaltReason = charge.outcome === "insufficient" ? "credits" : "ledger";
         halt(reason);
         fail(it, reason);
         continue;
@@ -1037,7 +1052,7 @@ interface ScoreBatch {
   /** Net credits actually deducted for the scores that stand. */
   creditsCharged: number;
   model: string | null;
-  /** `ledger`: the credit ledger errored (not an empty balance); nothing was charged. */
+  /** `ledger`: the credit ledger errored or (automatic) failed open; nothing was charged. */
   stop: "credits" | "ledger" | "time" | "jev" | null;
 }
 
@@ -1046,13 +1061,19 @@ interface ScoreBatch {
  * refunded when the call fails; at most `concurrency` calls in flight and
  * `minStartIntervalMs` between starts; no call starts unless its worst case
  * fits before the scoring deadline. Never throws for a single comment.
+ *
+ * `automatic` (sweep, reclassify): a charge the ledger did not really deduct
+ * (it failed open) stops the batch as `ledger` — automatic scoring never runs
+ * unmetered. A dry run is a person's request and keeps the fail-open
+ * behaviour of the manual comment tools.
  */
 async function scoreBatch(
   deps: ScoringDeps,
   organizationId: string,
   rubric: ScoringRubric,
   comments: readonly ScoringComment[],
-  stepStartMs: number
+  stepStartMs: number,
+  automatic: boolean
 ): Promise<ScoreBatch> {
   const t = tuning(deps);
   const deadlineMs = stepStartMs + t.scoringWindowMs;
@@ -1081,8 +1102,9 @@ async function scoreBatch(
       if (stop) continue;
 
       const charge = await deps.credits.charge(organizationId, SCORE_CREDITS);
-      if (charge.outcome !== "ok") {
-        stop = stop ?? (charge.outcome === "error" ? "ledger" : "credits");
+      if (charge.outcome !== "ok" || (automatic && isUnmetered(charge, SCORE_CREDITS))) {
+        // Nothing was deducted (insufficient, error, or failed open): no refund owed.
+        stop = stop ?? (charge.outcome === "insufficient" ? "credits" : "ledger");
         continue;
       }
       let res: JevCallResult;
@@ -1280,8 +1302,9 @@ async function dropWindow(store: SweepStore, youtubeChannelId: string, at: Date)
  * `skipped: quota breaker` (cursor → now); any other ends
  * `skipped: youtube error` with its reason and keeps the cursor, so the next
  * run reads the same window again. A stored resume token YouTube refuses
- * cannot reach its gap any more: that gap is dropped explicitly
- * (`listing_resume_rejected`), the cursor moves to the newest comment seen.
+ * cannot reach its gap any more: the token is cleared, the cursor stays, and
+ * the listing restarts from page 1 in the same run
+ * (`listing_resume_restarted`); comments already stored are deduped.
  */
 export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<SweepBeginResult> {
   const t = tuning(deps);
@@ -1314,10 +1337,13 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
   const resume: ListingResume | null = automation.listingPageToken
     ? { pageToken: automation.listingPageToken, newest: automation.listingNewest ?? null }
     : null;
-  const threads: RawCommentThread[] = [];
-  let pageToken: string | undefined = resume?.pageToken;
+  let threads: RawCommentThread[] = [];
+  let pageToken: string | undefined;
   let reached = false;
-  try {
+  /** Reads pages from `startToken` until one reaches the cursor or the page limit. */
+  const listFrom = async (startToken: string | undefined) => {
+    threads = [];
+    pageToken = startToken;
     do {
       const page = await deps.youtube.listThreads(channel.channelId, pageToken);
       pagesRead++;
@@ -1335,6 +1361,20 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
           return Number.isFinite(at) && at < floor.getTime();
         });
     } while (!reached && pagesRead < t.maxListPages);
+  };
+  let restarted = false;
+  try {
+    try {
+      await listFrom(resume?.pageToken);
+    } catch (err) {
+      // A stored resume token YouTube refuses cannot reach its gap any more.
+      // Keep the cursor, forget the token and list again from page 1: the
+      // gap is read from the top, and comments already stored are deduped.
+      if (!resume || !deps.classifyListError(err).badPageToken) throw err;
+      await deps.store.setListingResume(channel.id, null);
+      restarted = true;
+      await listFrom(undefined);
+    }
   } catch (err) {
     const cls = deps.classifyListError(err);
     if (cls.quota) {
@@ -1344,11 +1384,6 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
         // Recording the breaker must not mask the skip itself.
       }
       return skip("skipped: quota breaker", "quota", true);
-    }
-    if (resume && cls.badPageToken) {
-      await deps.store.setListingResume(channel.id, null);
-      if (resume.newest) await deps.store.advanceCursor(channel.id, resume.newest);
-      return skip("skipped: youtube error", "listing_resume_rejected", false);
     }
     return skip("skipped: youtube error", cls.reason, false);
   }
@@ -1361,10 +1396,10 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
     // Stopped by the page limit before the cursor: resume here next run.
     await deps.store.setListingResume(channel.id, { pageToken, newest });
   } else {
-    if (resume) await deps.store.setListingResume(channel.id, null);
+    if (resume && !restarted) await deps.store.setListingResume(channel.id, null);
     if (newest) await deps.store.advanceCursor(channel.id, newest);
   }
-  return { status: "continue", reason: null, ingested, pagesRead };
+  return { status: "continue", reason: restarted ? "listing_resume_restarted" : null, ingested, pagesRead };
 }
 
 /** The shared ending of a scoring / decision step. */
@@ -1453,7 +1488,7 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
   if (claimed.length === 0) return end("done", null, false);
   const rules = await deps.store.getRules(channel.id);
 
-  const batch = await scoreBatch(deps, organizationId, rubric, claimed, stepStartMs);
+  const batch = await scoreBatch(deps, organizationId, rubric, claimed, stepStartMs, true);
   for (const { comment, result } of batch.scored) {
     await deps.store.saveScore(channel.id, scoreRow(comment, result, rubric.version));
   }
@@ -1581,7 +1616,7 @@ export async function reclassifyChunk(
   if (rows.length === 0) return result("done", null, afterId);
   const rules = await deps.store.getRules(channel.id);
 
-  const batch = await scoreBatch(deps, organizationId, published, rows, stepStartMs);
+  const batch = await scoreBatch(deps, organizationId, published, rows, stepStartMs, true);
   for (const { comment, result: r } of batch.scored) {
     await deps.store.saveScore(channel.id, scoreRow(comment, r, version));
   }
@@ -1652,7 +1687,7 @@ export async function dryRun(
   if (!channel.organizationId) return { ...empty, stoppedReason: "out of credits" };
   const limit = Math.max(0, Math.min(opts.limit ?? DRY_RUN_MAX_COMMENTS, DRY_RUN_MAX_COMMENTS));
   const rows = limit > 0 ? await deps.store.listForDryRun(channel.id, limit) : [];
-  const batch = await scoreBatch(deps, channel.organizationId, rubric, rows, stepStartMs);
+  const batch = await scoreBatch(deps, channel.organizationId, rubric, rows, stepStartMs, false);
 
   const choices: Record<string, number> = {};
   for (const { result } of batch.scored) {

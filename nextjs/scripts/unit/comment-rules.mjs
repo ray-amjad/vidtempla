@@ -453,3 +453,14 @@ test("R1 #4: reclassify marks a score decided only once its decision was attempt
     "the unstarted decision stays open for the next sweep"
   );
 });
+
+test("R2 #6: reclassify treats a fail-open scoring charge as a ledger error: no unmetered Jev call", async () => {
+  const rows = [rcRow("a", "none")];
+  const h = reclassifyHarness({ rows, v2: { a: SPAMMY } });
+  h.deps.credits.charge = async () => ({ outcome: "ok", refundable: 0 });
+  const r = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.equal(r.status, "done");
+  assert.equal(r.reason, "credit_ledger_error");
+  assert.equal(h.jevCalls.length, 0);
+  assert.equal(h.applyCalls.length, 0);
+});

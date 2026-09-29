@@ -125,6 +125,11 @@ function harness(opts = {}) {
         events.push({ type: "ledgerError", amount });
         return { outcome: "error", refundable: 0 };
       }
+      // `failOpen(amount)` true: consumeCredits failed open — "ok", nothing deducted.
+      if (opts.failOpen?.(amount)) {
+        events.push({ type: "failOpen", amount });
+        return { outcome: "ok", refundable: 0 };
+      }
       if (balance < amount) return { outcome: "insufficient", refundable: 0 };
       balance -= amount;
       events.push({ type: "charge", amount });
@@ -274,6 +279,8 @@ function harness(opts = {}) {
       listCalls.push(args);
       if (opts.listError) throw opts.listError;
       const [, token] = args;
+      const tokenError = opts.listErrorFor?.(token);
+      if (tokenError) throw tokenError;
       const index = token ? Number(token.slice(1)) : 0;
       const items = pages[index] ?? [];
       return { items, nextPageToken: index + 1 < pages.length ? `p${index + 1}` : undefined };
@@ -372,7 +379,11 @@ function harness(opts = {}) {
     creditBalance: async () => balance,
     quota,
     youtube,
-    classifyListError: (err) => ({ quota: Boolean(err?.quota), reason: err?.quota ? "quota" : "youtube_error" }),
+    classifyListError: (err) => ({
+      quota: Boolean(err?.quota),
+      reason: err?.quota ? "quota" : "youtube_error",
+      badPageToken: Boolean(err?.badPageToken),
+    }),
     jev,
     store,
     apply,
@@ -1108,4 +1119,91 @@ test("R1 #4: an owed decision the balance cannot pay for waits; new comments are
   assert.equal(out.status, "done");
   assert.equal(h.byText("Great video!").scoreStatus, "scored", "the new comment is scored");
   assert.equal(h.byText(spam).moderationState, "none");
+});
+
+// ─── Review round 2 ──────────────────────────────────────────────────────────
+
+test("R2 #6: a fail-open scoring charge (ok, nothing deducted) stops the sweep as a ledger error before any Jev call", async () => {
+  const h = harness({
+    failOpen: (amount) => amount === SCORE_CREDITS,
+    pages: [[thread({ id: "yt-a", text: "first", minutesAfter: 31 }), thread({ id: "yt-b", text: "second", minutesAfter: 32 })]],
+  });
+  const out = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(out.status, "done");
+  assert.equal(out.reason, "credit_ledger_error");
+  assert.equal(h.jevRequests.length, 0, "no unmetered Jev call");
+  assert.equal(h.byText("first").scoreStatus, "pending", "the comments wait for a working ledger");
+  assert.equal(h.byText("second").scoreStatus, "pending");
+  assert.ok(h.automation.cursor.getTime() < START.getTime(), "the window is kept");
+});
+
+test("R2 #6: a fail-open action charge halts the automatic actor as `ledger`; nothing reaches YouTube", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({
+    failOpen: (amount) => amount === MODERATION_WRITE_CREDITS,
+    pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 31 })]],
+  });
+  const out = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(out.status, "done");
+  assert.equal(out.reason, "credit_ledger_error");
+  assert.equal(h.ytWrites.length, 0, "no unmetered YouTube write");
+  assert.equal(h.byText(spam).moderationState, "none");
+  assert.equal(h.actionLog.at(-1).error, "ledger");
+});
+
+test("R2 #6: a dry run (a person's request) keeps the fail-open behaviour of the manual comment tools", async () => {
+  const h = harness({ failOpen: () => true });
+  await h.deps.store.insertComments(CHANNEL.id, [
+    { commentId: "a", parentId: null, videoId: "v", authorChannelId: "UCa", authorDisplayName: "", text: "one", textSource: "display", publishedAt: new Date() },
+  ]);
+  const deps = { clock: h.deps.clock, sleep: h.deps.sleep, credits: h.deps.credits, jev: h.deps.jev, store: h.deps.store };
+  const res = await dryRun(deps, CHANNEL, RUBRIC, []);
+  assert.equal(res.scored, 1);
+  assert.equal(res.stoppedReason, null);
+});
+
+test("R2 #7: a rejected resume token keeps the old cursor, clears the token and relists from page 1", async () => {
+  const cursor = ENABLED_AT;
+  const h = harness({
+    automation: { cursor, listingPageToken: "stale", listingNewest: new Date(ENABLED_AT.getTime() + 50 * 60_000) },
+    listErrorFor: (token) => (token === "stale" ? Object.assign(new Error("invalidPageToken"), { badPageToken: true }) : null),
+    pages: [
+      // Page 1: new since the last run, plus one the last run already stored.
+      [thread({ id: "yt-55", text: "c55", minutesAfter: 55 }), thread({ id: "yt-50", text: "c50", minutesAfter: 50 })],
+      // Page 2: the gap the stale token pointed at, then the cursor.
+      [thread({ id: "yt-20", text: "c20", minutesAfter: 20 }), thread({ id: "yt-old", text: "old", minutesAfter: -5 })],
+    ],
+    rules: [],
+  });
+  await h.deps.store.insertComments(CHANNEL.id, [
+    { commentId: "yt-50", parentId: null, videoId: "vid-1", authorChannelId: "UCx", authorDisplayName: "", text: "c50", textSource: "display", publishedAt: new Date(ENABLED_AT.getTime() + 50 * 60_000) },
+  ]);
+  const out = await sweepBegin(h.deps, CHANNEL);
+  assert.equal(out.status, "continue");
+  assert.deepEqual(h.listCalls.map((a) => a[1]), ["stale", undefined, "p1"], "relisted from page 1");
+  assert.ok(h.byText("c20"), "the unread gap is ingested, not skipped");
+  assert.ok(h.byText("c55"));
+  assert.equal([...h.comments.values()].filter((r) => r.commentId === "yt-50").length, 1, "repeats deduped");
+  assert.equal(h.byText("old"), undefined);
+  assert.equal(h.automation.listingPageToken, null, "the token is cleared");
+  assert.equal(
+    h.automation.cursor.toISOString(),
+    new Date(ENABLED_AT.getTime() + 55 * 60_000).toISOString(),
+    "the cursor moves only once the listing reached it"
+  );
+});
+
+test("R2 #7: when the relisting itself fails, the old cursor stays and the token is gone", async () => {
+  let calls = 0;
+  const h = harness({
+    automation: { listingPageToken: "stale", listingNewest: new Date(ENABLED_AT.getTime() + 50 * 60_000) },
+    listErrorFor: (token) =>
+      ++calls && token === "stale"
+        ? Object.assign(new Error("invalidPageToken"), { badPageToken: true })
+        : Object.assign(new Error("boom"), { status: 500 }),
+  });
+  const out = await sweepBegin(h.deps, CHANNEL);
+  assert.equal(out.status, "skipped: youtube error");
+  assert.equal(h.automation.cursor.getTime(), ENABLED_AT.getTime(), "not jumped to the resume's newest");
+  assert.equal(h.automation.listingPageToken, null);
 });

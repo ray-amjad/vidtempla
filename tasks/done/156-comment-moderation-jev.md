@@ -248,3 +248,5 @@ Fail-first counts: each new test was run against the unfixed code first
 | --- | --- | --- | --- |
 | #3 classifications meta has no `total` | 1 static check in `scripts/unit/moderation-static.mjs` (`R2 #3 …`; the count is a Drizzle query in `queries.ts`, covered by tsc) | 1 / 1 | 1 / 1 |
 | #2 removed rubric examples come back in the next draft | 1 static check in `moderation-static.mjs` (`R2 #2 …`; SQL in `service.ts`, covered by tsc) | 1 / 1 | 1 / 1 |
+| #6 fail-open credit charge treated as paid | 3 in `comment-sweep.mjs`, 1 in `comment-rules.mjs`, 2 in `moderation-caps.mjs` (`R2 #6 …`): sweep scoring, sweep action, reclassify scoring and the automatic chokepoint stop as `ledger`; dry run and a manual dashboard action keep fail-open | 4 / 6 (the 2 fail-open guards pin unchanged behaviour) | 6 / 6 |
+| #7 an expired resume token skips the unread pages | 2 in `comment-sweep.mjs` (`R2 #7 …`): relist from page 1 ingests the gap and dedupes; a failed relist keeps the old cursor | 2 / 2 | 2 / 2 |

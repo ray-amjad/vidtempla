@@ -539,3 +539,26 @@ test("only comment ids reach the YouTube port (I7)", async () => {
     assert.ok(!JSON.stringify(e).includes("DROP TABLE"));
   }
 });
+
+// ─── Review round 2 ──────────────────────────────────────────────────────────
+
+test("R2 #6: for the automatic actor a fail-open charge (ok, nothing deducted) is a ledger error: no YouTube call", async () => {
+  const h = harness();
+  h.deps.credits.charge = async () => ({ outcome: "ok", refundable: 0 });
+  const r = await run(h, AUTO, decisions("hold", 1, 2));
+  assert.equal(r.halted, "ledger");
+  assert.equal(h.yt().length, 0);
+  for (const o of r.outcomes) {
+    assert.equal(o.status, "failed");
+    assert.equal(o.error, "ledger");
+  }
+});
+
+test("R2 #6: a manual dashboard action keeps the fail-open behaviour of the existing comment tools", async () => {
+  const h = harness();
+  h.deps.credits.charge = async () => ({ outcome: "ok", refundable: 0 });
+  const r = await run(h, HUMAN, decisions("hold", 1, 1));
+  assert.equal(r.halted, null);
+  assert.equal(h.yt().length, 1);
+  assert.equal(r.outcomes[0].status, "applied");
+});
