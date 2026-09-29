@@ -3124,6 +3124,10 @@ paths:
                         description: Opaque cursor for the next page. Null on the last page.
                       hasMore:
                         type: boolean
+                      total:
+                        type: integer
+                        description: Comments matching channelId and label across all pages.
+                        example: 142
                       quotaUnits:
                         type: integer
                         example: 0

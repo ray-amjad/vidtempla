@@ -238,3 +238,13 @@ Schema: migration `drizzle/0025_jazzy_raza.sql` adds
 Gates after the round (from `nextjs/`): `npm run test:unit` 160 / 160,
 `npm run test:org-guards` pass, `npm run test:docs-coverage` 47/47/14 pass,
 `npx tsc --noEmit -p .` clean.
+
+## Review round 2 fixes
+
+Fail-first counts: each new test was run against the unfixed code first
+(the fix stashed), then with the fix.
+
+| Finding | New tests | Failed before the fix | Pass after |
+| --- | --- | --- | --- |
+| #3 classifications meta has no `total` | 1 static check in `scripts/unit/moderation-static.mjs` (`R2 #3 …`; the count is a Drizzle query in `queries.ts`, covered by tsc) | 1 / 1 | 1 / 1 |
+| #2 removed rubric examples come back in the next draft | 1 static check in `moderation-static.mjs` (`R2 #2 …`; SQL in `service.ts`, covered by tsc) | 1 / 1 | 1 / 1 |

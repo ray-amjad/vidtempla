@@ -425,6 +425,25 @@ export async function saveRubricDraft(
       .update(commentRubrics)
       .set({ labels: checked.labels, instructions, examples, updatedAt: new Date() })
       .where(eq(commentRubrics.id, d.id));
+    // An accepted example that was never published is re-added to every new
+    // draft (getOrCreateDraft) until something records that it was dropped.
+    // Removing it from the draft is that record: it becomes `rejected`.
+    const removed = d.examples
+      .map((e) => e.exampleId)
+      .filter((id): id is string => Boolean(id && remove.has(id)));
+    if (removed.length > 0) {
+      await tx
+        .update(commentRubricExamples)
+        .set({ status: "rejected", reviewedBy: ctx.userId, reviewedAt: new Date() })
+        .where(
+          and(
+            eq(commentRubricExamples.youtubeChannelId, channel.id),
+            inArray(commentRubricExamples.id, removed),
+            eq(commentRubricExamples.status, "accepted"),
+            isNull(commentRubricExamples.includedInVersion)
+          )
+        );
+    }
     return { version: d.version, labels: checked.labels, instructions, examples };
   });
   return { data: draft };

@@ -204,6 +204,8 @@ export interface CommentListOpts {
   moderationStates?: ModerationState[];
   /** Filter by the winning label of the published-version score. */
   label?: string;
+  /** Also count every row matching the filters (the v1 envelope's `meta.total`). */
+  withTotal?: boolean;
 }
 
 async function publishedVersion(channelUuid: string): Promise<number | null> {
@@ -218,11 +220,22 @@ async function listComments(
   channelUuid: string,
   scope: string,
   opts: CommentListOpts
-): Promise<ServiceResult<{ items: ScoredCommentRow[]; cursor: string | null; hasMore: boolean }>> {
+): Promise<
+  ServiceResult<{ items: ScoredCommentRow[]; cursor: string | null; hasMore: boolean; total: number | null }>
+> {
   const cursor = readCursor(opts.cursor, scope);
   if (cursor === "bad") return badCursor();
   const limit = clampLimit(opts.limit);
   const version = await publishedVersion(channelUuid);
+  const scoreJoin = and(eq(commentScores.commentId, youtubeComments.id), eq(commentScores.rubricVersion, version ?? -1));
+  // The page and the total share every filter except the cursor.
+  const filters = and(
+    eq(youtubeComments.youtubeChannelId, channelUuid),
+    opts.moderationStates && opts.moderationStates.length > 0
+      ? inArray(youtubeComments.moderationState, opts.moderationStates)
+      : undefined,
+    opts.label ? eq(commentScores.choice, opts.label) : undefined
+  );
 
   const rows = await db
     .select({
@@ -243,26 +256,23 @@ async function listComments(
       confidence: commentScores.confidence,
     })
     .from(youtubeComments)
-    .leftJoin(
-      commentScores,
-      and(eq(commentScores.commentId, youtubeComments.id), eq(commentScores.rubricVersion, version ?? -1))
-    )
-    .where(
-      and(
-        eq(youtubeComments.youtubeChannelId, channelUuid),
-        opts.moderationStates && opts.moderationStates.length > 0
-          ? inArray(youtubeComments.moderationState, opts.moderationStates)
-          : undefined,
-        opts.label ? eq(commentScores.choice, opts.label) : undefined,
-        before(youtubeComments.publishedAt, youtubeComments.id, cursor)
-      )
-    )
+    .leftJoin(commentScores, scoreJoin)
+    .where(and(filters, before(youtubeComments.publishedAt, youtubeComments.id, cursor)))
     .orderBy(msDesc(youtubeComments.publishedAt), desc(youtubeComments.id))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
+  let total: number | null = null;
+  if (opts.withTotal) {
+    const [row] = await db
+      .select({ total: count() })
+      .from(youtubeComments)
+      .leftJoin(commentScores, scoreJoin)
+      .where(filters);
+    total = row?.total ?? 0;
+  }
   return {
     data: {
       items: page.map((r) => ({
@@ -292,6 +302,7 @@ async function listComments(
           ? encodeCompositeCursor({ scope, key: last.publishedAt.toISOString(), id: last.id })
           : null,
       hasMore,
+      total,
     },
   };
 }
@@ -562,7 +573,7 @@ export interface ClassificationItem {
 export async function listClassifications(
   organizationId: string,
   input: { channelId: string; label?: string; cursor?: string; limit?: number }
-): Promise<ServiceResult<{ items: ClassificationItem[]; cursor: string | null; hasMore: boolean }>> {
+): Promise<ServiceResult<{ items: ClassificationItem[]; cursor: string | null; hasMore: boolean; total: number }>> {
   const [channel] = await db
     .select({ id: youtubeChannels.id })
     .from(youtubeChannels)
@@ -579,6 +590,7 @@ export async function listClassifications(
     cursor: input.cursor,
     limit: input.limit,
     label: input.label,
+    withTotal: true,
   });
   if ("error" in res) return res;
   return {
@@ -599,6 +611,7 @@ export async function listClassifications(
       })),
       cursor: res.data.cursor,
       hasMore: res.data.hasMore,
+      total: res.data.total ?? 0,
     },
   };
 }

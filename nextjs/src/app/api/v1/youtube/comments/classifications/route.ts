@@ -58,6 +58,7 @@ export async function GET(request: NextRequest) {
     apiSuccess(result.data.items, {
       cursor: result.data.cursor,
       hasMore: result.data.hasMore,
+      total: result.data.total,
       quotaUnits: 0,
     })
   );
