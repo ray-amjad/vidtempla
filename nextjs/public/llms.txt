@@ -57,6 +57,7 @@ All REST API operations use the `/api/v1` base path and API-key authentication.
 - `GET /api/v1/videos/{id}/variables`
 - `GET /api/v1/youtube/comments`
 - `GET /api/v1/youtube/comments/{id}`
+- `GET /api/v1/youtube/comments/classifications`
 - `GET /api/v1/youtube/comments/edits`
 - `GET /api/v1/youtube/playlists`
 - `GET /api/v1/youtube/playlists/{id}`
@@ -109,6 +110,7 @@ The Streamable HTTP MCP server is available at `https://www.vidtempla.com/api/mc
 - `get_video_retention`
 - `get_video_variables`
 - `list_channels`
+- `list_comment_classifications`
 - `list_comment_edits`
 - `list_comment_threads`
 - `list_containers`

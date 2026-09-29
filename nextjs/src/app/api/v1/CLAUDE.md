@@ -106,10 +106,12 @@ The comment routes are the one group that does not call YouTube itself. They del
 | `/youtube/comments/reply` | POST | 50 — new content, no snapshot |
 | `/youtube/comments/bulk-update` | POST | 51 per item, plus 1 per stale row reconciled |
 | `/youtube/comments/edits` | GET | 0 — reads the snapshot table only |
+| `/youtube/comments/classifications` | GET | 0 — stored moderation scores (#156), `channelId` required |
 
 - Every destructive comment write records the prior text in `comment_edits` before it touches YouTube. YouTube keeps no comment version history, so that row is the only surviving copy; `GET /youtube/comments/edits` is how an agent reads it back. Only rows with `textSource: "original"` hold restorable text.
 - `bulk-update` carries at most 40 items and declares `export const maxDuration = 60`. Its request schema is shared with the MCP tool and the dashboard mutation in `src/lib/comment-schemas.ts` — the three surfaces differ only in transport, so validation must not diverge between them.
-- The three mutating routes require a `read-write` key via `requireWriteAccess`; the three read routes accept either tier.
+- The three mutating routes require a `read-write` key via `requireWriteAccess`; the four read routes accept either tier.
+- `classifications` is the one comment route that does not go through `services/comments.ts`: it reads the moderation tables through `listClassifications` in `src/lib/moderation/queries.ts`, which MCP `list_comment_classifications` shares. It returns scores and states, never comment text, and it is read-only — rules, rubrics and moderation actions are dashboard-only (owner/admin). A channel outside the key's org is 404; an org-less key keeps `withApiKey`'s 401 `API_KEY_REISSUE_REQUIRED`.
 
 ## Request Counting
 

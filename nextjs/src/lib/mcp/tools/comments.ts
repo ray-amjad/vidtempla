@@ -16,6 +16,7 @@ import {
   type CommentContext,
 } from "@/lib/services/comments";
 import { bulkUpdateInputShape } from "@/lib/comment-schemas";
+import { listClassifications } from "@/lib/moderation/queries";
 import {
   leanComment,
   leanThread,
@@ -169,6 +170,24 @@ export function registerCommentTools(server: McpServer) {
       const context = ctx();
       const result = await listCommentEdits(context, { channelId, commentId, cursor, limit });
       return finish(userId, "list_comment_edits", context, result);
+    }
+  );
+
+  server.tool(
+    "list_comment_classifications",
+    "List the stored moderation scores for one channel's viewer comments, newest comment first. Only channels with automatic comment moderation enabled in the dashboard have stored comments. Each item has the YouTube commentId, videoId, parentId (for replies), the winning label of the published rubric, per-label probabilities, the resolved Jev model, rubricVersion, scoreStatus (pending, scoring, scored, unscored) and moderationState (none, flagged, held, rejected, banned, deleted, released). label and probabilities are null until the comment is scored with the published rubric. Comment text is not returned; read it with list_comment_threads. Read-only: rules, rubrics and moderation actions are managed in the dashboard. Free — no YouTube call, no credits.",
+    {
+      channelId: z.string().describe("YouTube channel ID (UC...) connected to this workspace"),
+      label: z.string().optional().describe("Only comments whose winning label is this one, e.g. 'spam'"),
+      cursor: z.string().optional().describe("Pagination cursor from the previous page"),
+      limit: z.number().optional().describe("Results per page (1-100, default 50)"),
+    },
+    READ,
+    async ({ channelId, label, cursor, limit }) => {
+      const userId = getSessionUserId();
+      const result = await listClassifications(getSessionOrgId(), { channelId, label, cursor, limit });
+      logMcpRequest(userId, "list_comment_classifications", 0, "error" in result ? result.error.status : 200);
+      return toMcp(result);
     }
   );
 

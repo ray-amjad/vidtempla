@@ -9,7 +9,7 @@ export default function CommentsPage() {
     >
       <p>
         The Comments tab searches a connected channel for comments as they are
-        on YouTube right now. VidTempla does not store comments, so every search
+        on YouTube right now. Search never reads stored comments, so every search
         reads live results. The usual task is to find one comment that appears
         on many videos — for example a pinned link — and to rewrite it
         everywhere the link changed.
@@ -57,6 +57,25 @@ export default function CommentsPage() {
       <p>
         Open the comments drawer from a row in the Videos tab to read the
         threads on that video and to reply to them.
+      </p>
+      <h2>Read moderation scores from the API</h2>
+      <p>
+        When automatic comment moderation is enabled for a channel, VidTempla
+        stores each new viewer comment and scores it against the channel's
+        published rubric. Agents can read those scores with{" "}
+        <code>GET /api/v1/youtube/comments/classifications?channelId=UC…</code>{" "}
+        or the MCP tool <code>list_comment_classifications</code>. Each item
+        holds the YouTube comment ID, the winning label, the probability of
+        every label, the model version, and the moderation state the comment
+        is in now. Filter by <code>label</code> and page with{" "}
+        <code>cursor</code> and <code>limit</code> (at most 100).
+      </p>
+      <p>
+        Both are free: they read stored scores only, with no YouTube call and
+        no credits. They do not return comment text, and they cannot change
+        rules, rubrics, or moderation actions; only owners and admins change
+        those, in the dashboard. A channel that is not connected to the
+        workspace returns 404.
       </p>
     </DocsArticle>
   );

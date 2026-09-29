@@ -137,3 +137,45 @@ route `src/app/api/workflows/comment-sweep/route.ts`):
 `npx tsc --noEmit -p .` pass. The chokepoint test still covers the new files:
 a temporary `deleteComment` import added to `src/lib/moderation/deps.ts`
 failed 2 of its 8 tests, and was then removed.
+
+### Phase 4 — 2026-09-29
+
+Proof #9 lives in `nextjs/scripts/check-youtube-router-org-guards.mjs`
+(`npm run test:org-guards`), a plain assert script rather than `node:test`,
+so its counts are checks, not tests. It parses
+`src/server/api/routers/dashboard/moderation.ts` with comments stripped,
+pins the expected mutation list in both directions (10 admin mutations plus
+`suggestCorrection`), requires every mutation except `suggestCorrection` to be
+`orgAdminProcedure`, requires `suggestCorrection` to be `orgProcedure`,
+requires every query to be on an org procedure, forbids builder aliases, and
+checks that `dashboard.ts` registers the router.
+
+**Red 1** (guard written first, no `moderation.ts` yet): the existing youtube
+check passes, then `AssertionError: src/server/api/routers/dashboard/moderation.ts
+was not found`, exit 1.
+
+**Green** (router written and registered):
+`moderation router org guard checks passed: 11 mutations (10 orgAdminProcedure,
+1 orgProcedure), 8 queries on org procedures`, exit 0.
+
+**Red 2** (fail-first as briefed: `publishRubric` flipped to `orgProcedure`):
+`AssertionError: moderation.publishRubric is a mutation and must use
+orgAdminProcedure (I9), found orgProcedure`, exit 1. Reverted, and green again.
+
+Other mutations, each run on its own and reverted (8 of 8 failed, exit 1):
+
+| Mutation | Failure |
+| --- | --- |
+| `publishRubric` → `orgProcedure` | must use orgAdminProcedure |
+| `suggestCorrection` → `orgAdminProcedure` | must use orgProcedure |
+| `dryRunRubric` `.mutation(` → `.query(` | mutation list differs |
+| `applyManualAction` removed | mutation list differs |
+| empty `router({})` | no procedures found |
+| `rejectExample: /* orgAdminProcedure */ orgProcedure` | must use orgAdminProcedure |
+| `const adminish = orgProcedure` alias | must not alias a builder |
+| `moderation: moderationRouter` removed from `dashboard.ts` | must register |
+
+After the phase: `npm run test:unit` 141/141 (no new unit tests in this
+phase), `npm run test:org-guards` passes, `npm run test:docs-coverage` passes
+(47/47 REST operations, 47/47 MCP tools, 13/13 dashboard surfaces), and
+`npx tsc --noEmit -p .` is clean.
