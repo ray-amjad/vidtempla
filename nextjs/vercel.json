@@ -11,6 +11,10 @@
     {
       "path": "/api/workflows/retry-failed-pushes",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/workflows/comment-sweep",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

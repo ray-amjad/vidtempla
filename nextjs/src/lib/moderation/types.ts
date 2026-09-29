@@ -382,15 +382,265 @@ export interface QuotaBreaker {
   trip(): Promise<void>;
 }
 
+/**
+ * Why a Jev call produced no score. Every one of these leaves the comment
+ * `unscored` (never retried, never acted on) and refunds its 1 credit.
+ * - `rate_limited` / `overloaded` / `server_error` / `timeout` / `connection`:
+ *   still failing after the SDK's own retries (429, 529/5xx, timeouts).
+ * - `auth` / `not_configured`: the VidTempla key is wrong or absent; the run
+ *   stops calling Jev for the rest of the step.
+ * - `bad_request`: 400/422 — the request itself was refused.
+ * - `aborted`: the step deadline cut the call short.
+ * - `invalid_response`: a 2xx whose answer is missing or not a probability map.
+ */
+export type JevFailureReason =
+  | "rate_limited"
+  | "overloaded"
+  | "server_error"
+  | "timeout"
+  | "connection"
+  | "auth"
+  | "not_configured"
+  | "bad_request"
+  | "aborted"
+  | "invalid_response";
+
+export type JevCallResult =
+  | { ok: true; result: JevChoiceResult }
+  | { ok: false; reason: JevFailureReason; status: number | null };
+
 export interface JevPort {
-  choose(request: JevChoiceRequest): Promise<JevChoiceResult>;
+  /**
+   * One Choice call. Never throws: every failure comes back as `ok: false`.
+   * `deadlineMs` (epoch ms) aborts the call, retries included, at that instant.
+   */
+  choose(request: JevChoiceRequest, opts?: { deadlineMs?: number }): Promise<JevCallResult>;
 }
 
 export interface YouTubeCommentReader {
+  /** One `commentThreads.list` page (≤ 100 threads, 1 quota unit). */
   listThreads(
     channelId: string,
     pageToken?: string
   ): Promise<{ items: RawCommentThread[]; nextPageToken?: string }>;
+}
+
+// ─── Sweep, reclassify and dry run (phase 3) ─────────────────────────────────
+
+/** Rubric as scored: labels + owner wording + the examples frozen into it. */
+export interface ScoringRubric extends Rubric {
+  examples: RubricExample[];
+}
+
+/** comment_automation as the sweep reads it. */
+export interface AutomationState {
+  enabled: boolean;
+  enabledAt: Date | null;
+  /** Comments published at or before this are not ingested. */
+  cursor: Date | null;
+}
+
+/** A stored comment plus what Jev's state needs besides its text. */
+export interface ScoringComment extends StoredComment {
+  videoTitle: string | null;
+}
+
+/** One comment_scores row. */
+export interface ScoreInsert {
+  /** youtube_comments.id */
+  commentId: string;
+  rubricVersion: number;
+  model: string;
+  choice: string;
+  probabilities: LabelProbabilities;
+  confidence: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+/** The sweep / reclassify database side (Drizzle adapter in store.ts). */
+export interface SweepStore {
+  getAutomation(youtubeChannelId: string): Promise<AutomationState | null>;
+  getPublishedRubric(youtubeChannelId: string): Promise<ScoringRubric | null>;
+  getRules(youtubeChannelId: string): Promise<ModerationRule[]>;
+  /** Moves the cursor forward only; a `to` at or before the current cursor is a no-op. */
+  advanceCursor(youtubeChannelId: string, to: Date): Promise<void>;
+  /** Inserts comments as `pending`; an already-stored comment id is skipped. Returns the inserted count. */
+  insertComments(youtubeChannelId: string, comments: readonly IngestComment[]): Promise<number>;
+  /** `scoring` rows claimed before `claimedBefore` → `unscored` (a killed step). */
+  expireStaleScoring(youtubeChannelId: string, claimedBefore: Date): Promise<number>;
+  /** Atomically moves up to `limit` `pending` rows to `scoring`, oldest first. */
+  claimPending(youtubeChannelId: string, limit: number): Promise<ScoringComment[]>;
+  /** Claimed rows whose Jev call never started → `pending` again (not charged). */
+  unclaim(youtubeChannelId: string, commentIds: readonly string[]): Promise<void>;
+  /**
+   * Inserts the score row (a duplicate comment+version is ignored), moves a
+   * `scoring` row to `scored` (other statuses are left alone), and records the
+   * resolved model on comment_automation.
+   */
+  saveScore(youtubeChannelId: string, score: ScoreInsert): Promise<void>;
+  /** → `unscored` (terminal). */
+  markUnscored(youtubeChannelId: string, commentIds: readonly string[]): Promise<void>;
+  /** Every `pending` row of the channel → `unscored` (a credit or quota stop drops the window). */
+  dropPending(youtubeChannelId: string): Promise<number>;
+  /**
+   * Reclassify candidates: `scored` comments in moderation state none,
+   * flagged or held, with no score for `version`, id > `afterId`, ordered by id.
+   */
+  listForReclassify(
+    youtubeChannelId: string,
+    version: number,
+    afterId: string | null,
+    limit: number
+  ): Promise<ScoringComment[]>;
+  /** The most recent stored, scored, not-deleted comments, for a dry run. */
+  listForDryRun(youtubeChannelId: string, limit: number): Promise<ScoringComment[]>;
+  setRunStatus(youtubeChannelId: string, status: SweepStatus, at: Date): Promise<void>;
+}
+
+/** One decision the sweep hands to the chokepoint, by stored comment id. */
+export interface SweepDecision {
+  /** youtube_comments.id */
+  commentId: string;
+  action: ModerationAction;
+  ruleId: string | null;
+  rubricVersion: number;
+}
+
+/** `applyModerationDecision` for the automatic actor, injected so tests use a fake. */
+export interface ApplyPort {
+  apply(
+    channel: ChannelRef,
+    decisions: readonly SweepDecision[],
+    opts: { deadlineMs: number }
+  ): Promise<ApplyResult>;
+}
+
+/** Knobs, defaulted in core.ts; tests shrink them. */
+export interface ScoringTuning {
+  /** Comments claimed and scored per workflow step. */
+  chunkSize?: number;
+  /** Jev calls in flight at once per step. */
+  concurrency?: number;
+  /** Minimum gap between two Jev call starts (rate limit). */
+  minStartIntervalMs?: number;
+  /** A Jev call starts only if this much time is left before the scoring deadline. */
+  callBudgetMs?: number;
+  /** Scoring stops starting calls this long after the step starts. */
+  scoringWindowMs?: number;
+  /** The chokepoint's deadline, measured from the step start. */
+  stepBudgetMs?: number;
+  /** YouTube pages read per sweep at most. */
+  maxListPages?: number;
+  /** A `scoring` row older than this is from a killed step. */
+  staleScoringMs?: number;
+}
+
+export interface ScoringDeps {
+  clock: Clock;
+  sleep(ms: number): Promise<void>;
+  credits: CreditLedger;
+  jev: JevPort;
+  tuning?: ScoringTuning;
+}
+
+export interface SweepDeps extends ScoringDeps {
+  /** Current balance, or null when unknown (the charges then decide). */
+  creditBalance(organizationId: string): Promise<number | null>;
+  quota: QuotaBreaker;
+  youtube: YouTubeCommentReader;
+  /** How a thrown listing error should be treated (quota trips the breaker). */
+  classifyListError(err: unknown): { quota: boolean; reason: string };
+  store: SweepStore;
+  apply: ApplyPort;
+}
+
+export type ReclassifyDeps = ScoringDeps & {
+  creditBalance(organizationId: string): Promise<number | null>;
+  quota: QuotaBreaker;
+  apply: ApplyPort;
+  store: Pick<SweepStore, "getPublishedRubric" | "getRules" | "listForReclassify" | "saveScore">;
+};
+
+export type DryRunDeps = ScoringDeps & {
+  store: Pick<SweepStore, "listForDryRun">;
+};
+
+/** Sweep terminal states (spec stopping rules) + `skipped: youtube error`. */
+export type SweepStatus =
+  | "done"
+  | "skipped: disabled"
+  | "skipped: no published rubric"
+  | "skipped: out of credits"
+  | "skipped: quota breaker"
+  | "skipped: youtube error";
+
+/** Per-step counters, summed across a run. */
+export interface ScoringCounts {
+  scored: number;
+  unscored: number;
+  /** Net scoring credits (after refunds). */
+  creditsCharged: number;
+  decisions: number;
+  /** Chokepoint outcomes with status `applied`. */
+  applied: number;
+}
+
+export interface SweepBeginResult {
+  status: SweepStatus | "continue";
+  reason: string | null;
+  ingested: number;
+  pagesRead: number;
+}
+
+export interface SweepChunkResult extends ScoringCounts {
+  status: SweepStatus | "continue";
+  reason: string | null;
+}
+
+export interface SweepOutcome extends ScoringCounts {
+  status: SweepStatus;
+  reason: string | null;
+  ingested: number;
+  pagesRead: number;
+  chunks: number;
+}
+
+export type ReclassifyStatus = "done" | "superseded" | "out of credits" | "quota breaker";
+
+export interface ReclassifyChunkResult extends ScoringCounts {
+  status: ReclassifyStatus | "continue";
+  /** Why a terminal state was reached early (e.g. `jev_unavailable`), or null. */
+  reason: string | null;
+  /** Pass back as `afterId` for the next chunk. */
+  nextAfterId: string | null;
+  /** Held comments that now match no rule (I4: not acted on; a human may release). */
+  maybeRelease: string[];
+}
+
+export interface DryRunRuleCount {
+  ruleId: string | null;
+  label: string;
+  threshold: number;
+  action: ModerationAction;
+  /** Sampled comments this rule matches on its own. */
+  wouldFire: number;
+}
+
+export interface DryRunResult {
+  sampled: number;
+  scored: number;
+  unscored: number;
+  creditsCharged: number;
+  /** Why the run stopped early, or null when every sampled comment was tried. */
+  stoppedReason: "out of credits" | "time budget" | "jev unavailable" | null;
+  perRule: DryRunRuleCount[];
+  /** After I3 collapse: how many comments each action would win. */
+  byAction: Record<ModerationAction, number>;
+  /** How many comments Jev put in each label. */
+  choices: Record<string, number>;
+  /** The resolved model string of the last successful call. */
+  model: string | null;
 }
 
 /** YouTube `comments.setModerationStatus` values. */

@@ -44,6 +44,24 @@ import type {
   RuleValidationError,
   RuleValidationResult,
   TextSource,
+  ApplyPort,
+  DryRunDeps,
+  DryRunResult,
+  JevCallResult,
+  JevChoiceResult,
+  ReclassifyChunkResult,
+  ReclassifyDeps,
+  ScoreInsert,
+  ScoringComment,
+  ScoringCounts,
+  ScoringDeps,
+  ScoringRubric,
+  SweepBeginResult,
+  SweepChunkResult,
+  SweepDecision,
+  SweepDeps,
+  SweepOutcome,
+  SweepStatus,
 } from "./types";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -900,4 +918,598 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
   for (const [op, unit] of units) await runUnit(op, unit);
 
   return result;
+}
+
+
+// ─── Sweep, reclassify and dry run (phase 3) ─────────────────────────────────
+
+/** Credits per Jev score (spec permissions table). A failed call is refunded. */
+export const SCORE_CREDITS = 1;
+/** Comments claimed and scored per workflow step. */
+export const SWEEP_CHUNK_SIZE = 25;
+/** Jev calls in flight at once within one step. */
+export const JEV_CONCURRENCY = 4;
+/**
+ * Minimum gap between two Jev call starts in one step: at most 600 starts a
+ * minute, half TypeSafe's 1,200 requests-per-minute limit, leaving the other
+ * half for the SDK's own retries and a second step running at the same time.
+ */
+export const JEV_MIN_START_INTERVAL_MS = 100;
+/**
+ * Worst case of one Jev call with the SDK's retries (jev.ts: 3 attempts of
+ * 6 s plus ≤ 1.5 s backoff each). A call starts only when this much time is
+ * left before the scoring deadline, so no call is cut short in normal running.
+ */
+export const JEV_CALL_BUDGET_MS = 22_000;
+/** Scoring in a step stops starting Jev calls this long after the step starts. */
+export const SCORING_WINDOW_MS = 32_000;
+/**
+ * Everything in a step — scoring, then the chokepoint's YouTube calls — ends
+ * by this long after the step starts, under every surface's 60 s ceiling.
+ * The chokepoint starts no YouTube call it cannot finish by then.
+ */
+export const STEP_BUDGET_MS = 50_000;
+/** `commentThreads.list` pages per sweep at most (1 unit each, ≤ 100 threads). */
+export const MAX_LIST_PAGES = 10;
+/** A row still `scoring` this long after its claim is from a killed step. */
+export const STALE_SCORING_MS = 10 * 60 * 1000;
+/** Stored comments a dry run scores at most (1 credit each). */
+export const DRY_RUN_MAX_COMMENTS = 40;
+/** Chunk steps one sweep run takes at most; the rest wait, pending, for the next run. */
+export const MAX_SWEEP_CHUNKS = 40;
+
+function tuning(deps: ScoringDeps) {
+  const t = deps.tuning ?? {};
+  return {
+    chunkSize: t.chunkSize ?? SWEEP_CHUNK_SIZE,
+    concurrency: Math.max(1, t.concurrency ?? JEV_CONCURRENCY),
+    minStartIntervalMs: t.minStartIntervalMs ?? JEV_MIN_START_INTERVAL_MS,
+    callBudgetMs: t.callBudgetMs ?? JEV_CALL_BUDGET_MS,
+    scoringWindowMs: t.scoringWindowMs ?? SCORING_WINDOW_MS,
+    stepBudgetMs: t.stepBudgetMs ?? STEP_BUDGET_MS,
+    maxListPages: t.maxListPages ?? MAX_LIST_PAGES,
+    staleScoringMs: t.staleScoringMs ?? STALE_SCORING_MS,
+  };
+}
+
+function zeroCounts(): ScoringCounts {
+  return { scored: 0, unscored: 0, creditsCharged: 0, decisions: 0, applied: 0 };
+}
+
+function addCounts(into: ScoringCounts, from: ScoringCounts): void {
+  into.scored += from.scored;
+  into.unscored += from.unscored;
+  into.creditsCharged += from.creditsCharged;
+  into.decisions += from.decisions;
+  into.applied += from.applied;
+}
+
+/** A 2xx answer is usable only when it is a probability map over rubric labels. */
+function usableResult(result: JevChoiceResult, rubric: Rubric): boolean {
+  if (!result || typeof result.model !== "string" || !result.model) return false;
+  const probs = result.probabilities;
+  if (!probs || typeof probs !== "object") return false;
+  const labels = new Set(rubric.labels.map((l) => l.name));
+  let known = 0;
+  for (const [label, p] of Object.entries(probs)) {
+    if (typeof p !== "number" || !Number.isFinite(p)) return false;
+    if (labels.has(label)) known++;
+  }
+  return known > 0;
+}
+
+type SlotOutcome = "scored" | "failed" | "deferred" | "notStarted";
+
+interface ScoreBatch {
+  scored: Array<{ comment: ScoringComment; result: JevChoiceResult }>;
+  /** Jev failed after the SDK's retries: refunded, to be marked unscored. */
+  failed: ScoringComment[];
+  /** Jev is not usable at all (no key, bad key): refunded, the comment is not at fault. */
+  deferred: ScoringComment[];
+  /** Never charged, never sent. */
+  notStarted: ScoringComment[];
+  /** Index of the first slot that was not scored or failed, or -1. */
+  firstUnfinished: number;
+  /** Net credits actually deducted for the scores that stand. */
+  creditsCharged: number;
+  model: string | null;
+  stop: "credits" | "time" | "jev" | null;
+}
+
+/**
+ * Scores `comments` against `rubric`: 1 credit charged before each call,
+ * refunded when the call fails; at most `concurrency` calls in flight and
+ * `minStartIntervalMs` between starts; no call starts unless its worst case
+ * fits before the scoring deadline. Never throws for a single comment.
+ */
+async function scoreBatch(
+  deps: ScoringDeps,
+  organizationId: string,
+  rubric: ScoringRubric,
+  comments: readonly ScoringComment[],
+  stepStartMs: number
+): Promise<ScoreBatch> {
+  const t = tuning(deps);
+  const deadlineMs = stepStartMs + t.scoringWindowMs;
+  const slots: SlotOutcome[] = comments.map(() => "notStarted");
+  const results: Array<JevChoiceResult | null> = comments.map(() => null);
+  let next = 0;
+  let nextSlotMs = 0;
+  let stop: ScoreBatch["stop"] = null;
+  let creditsCharged = 0;
+  let model: string | null = null;
+
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= comments.length) return;
+      const comment = comments[i]!;
+      if (stop) continue;
+      const nowMs = deps.clock.now().getTime();
+      const startAt = Math.max(nowMs, nextSlotMs);
+      if (startAt + t.callBudgetMs > deadlineMs) {
+        stop = stop ?? "time";
+        continue;
+      }
+      nextSlotMs = startAt + t.minStartIntervalMs;
+      if (startAt > nowMs) await deps.sleep(startAt - nowMs);
+      if (stop) continue;
+
+      const charge = await deps.credits.charge(organizationId, SCORE_CREDITS);
+      if (charge.outcome !== "ok") {
+        stop = stop ?? "credits";
+        continue;
+      }
+      let res: JevCallResult;
+      try {
+        res = await deps.jev.choose(
+          buildJevRequest(rubric, comment.text, comment.videoTitle, rubric.examples),
+          { deadlineMs }
+        );
+      } catch {
+        res = { ok: false, reason: "connection", status: null };
+      }
+      if (res.ok && !usableResult(res.result, rubric)) {
+        res = { ok: false, reason: "invalid_response", status: null };
+      }
+      if (!res.ok) {
+        await deps.credits.refund(organizationId, charge);
+        if (res.reason === "auth" || res.reason === "not_configured") {
+          slots[i] = "deferred";
+          stop = stop ?? "jev";
+        } else {
+          slots[i] = "failed";
+        }
+        continue;
+      }
+      slots[i] = "scored";
+      results[i] = res.result;
+      creditsCharged += charge.refundable;
+      model = res.result.model;
+    }
+  };
+
+  const workers = Math.min(t.concurrency, comments.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+
+  const batch: ScoreBatch = {
+    scored: [],
+    failed: [],
+    deferred: [],
+    notStarted: [],
+    firstUnfinished: -1,
+    creditsCharged,
+    model,
+    stop,
+  };
+  slots.forEach((slot, i) => {
+    const comment = comments[i]!;
+    if (slot === "scored") batch.scored.push({ comment, result: results[i]! });
+    else if (slot === "failed") batch.failed.push(comment);
+    else if (slot === "deferred") batch.deferred.push(comment);
+    else batch.notStarted.push(comment);
+    if ((slot === "deferred" || slot === "notStarted") && batch.firstUnfinished === -1) {
+      batch.firstUnfinished = i;
+    }
+  });
+  return batch;
+}
+
+/** I4: flag is not an action, so only these states may still be acted on. */
+function neverActioned(state: ModerationState): boolean {
+  return state === "none" || state === "flagged";
+}
+
+/**
+ * The rule evaluator's input filter (I4): decisions only for comments that
+ * never received an action; a flag is not repeated on a flagged comment.
+ * Held comments that now match no rule go to `maybeRelease`.
+ */
+function decide(
+  rules: readonly ModerationRule[],
+  scored: ScoreBatch["scored"],
+  rubricVersion: number
+): { decisions: SweepDecision[]; maybeRelease: string[] } {
+  const decisions: SweepDecision[] = [];
+  const maybeRelease: string[] = [];
+  for (const { comment, result } of scored) {
+    const evaluation = evaluateRules(rules, result.probabilities);
+    if (comment.moderationState === "held" && evaluation.action === null) {
+      maybeRelease.push(comment.id);
+      continue;
+    }
+    if (!neverActioned(comment.moderationState) || !evaluation.action) continue;
+    if (evaluation.action === "flag" && comment.moderationState === "flagged") continue;
+    decisions.push({
+      commentId: comment.id,
+      action: evaluation.action,
+      ruleId: evaluation.rule?.id ?? null,
+      rubricVersion,
+    });
+  }
+  return { decisions, maybeRelease };
+}
+
+function scoreRow(comment: ScoringComment, result: JevChoiceResult, rubricVersion: number): ScoreInsert {
+  return {
+    commentId: comment.id,
+    rubricVersion,
+    model: result.model,
+    choice: result.choice,
+    probabilities: result.probabilities,
+    confidence: result.confidence,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+  };
+}
+
+/** Hands matches to the chokepoint; maps its halt onto a stopping rule. */
+async function applyMatches(
+  apply: ApplyPort,
+  channel: ChannelRef,
+  decisions: SweepDecision[],
+  deadlineMs: number
+): Promise<{ applied: number; halt: "credits" | "quota" | null }> {
+  if (decisions.length === 0) return { applied: 0, halt: null };
+  let result: ApplyResult;
+  try {
+    result = await apply.apply(channel, decisions, { deadlineMs });
+  } catch {
+    // The chokepoint logs its own failures; the scores stand, nothing was acted on.
+    return { applied: 0, halt: null };
+  }
+  const applied = result.outcomes.filter((o) => o.status === "applied").length;
+  const halt =
+    result.halted === "credits"
+      ? "credits"
+      : result.halted === "quota" || result.halted === "quotaBreaker"
+        ? "quota"
+        : null;
+  return { applied, halt };
+}
+
+/**
+ * Step 1 of a sweep: the refusals, then ingest.
+ *
+ * Refuses, in order: a disabled channel (or one with no organization to
+ * bill), a channel with no published rubric, a tripped quota breaker and an
+ * org with no credits. The last two advance the cursor to now, so the missed
+ * window is dropped. Then reads `commentThreads.list` pages until a page
+ * reaches the cursor (or `maxListPages`), filters them (I5, about-channel,
+ * cursor, duplicates), stores the survivors as `pending` and moves the cursor
+ * to the newest stored comment.
+ *
+ * A listing error is never success: a quota error trips the breaker and ends
+ * `skipped: quota breaker` (cursor → now); any other ends
+ * `skipped: youtube error` with its reason and keeps the cursor, so the next
+ * run reads the same window again.
+ */
+export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<SweepBeginResult> {
+  const t = tuning(deps);
+  const now = deps.clock.now();
+  let pagesRead = 0;
+  const skip = async (
+    status: SweepStatus,
+    reason: string | null,
+    advanceCursor: boolean
+  ): Promise<SweepBeginResult> => {
+    if (advanceCursor) await deps.store.advanceCursor(channel.id, now);
+    await deps.store.setRunStatus(channel.id, status, now);
+    return { status, reason, ingested: 0, pagesRead };
+  };
+
+  const automation = await deps.store.getAutomation(channel.id);
+  if (!automation || !automation.enabled) return skip("skipped: disabled", null, false);
+  if (!channel.organizationId) return skip("skipped: disabled", "no_organization", false);
+  const rubric = await deps.store.getPublishedRubric(channel.id);
+  if (!rubric) return skip("skipped: no published rubric", null, false);
+  if (await deps.quota.isTripped()) return skip("skipped: quota breaker", "quota_breaker", true);
+  const balance = await deps.creditBalance(channel.organizationId);
+  if (balance !== null && balance < SCORE_CREDITS) {
+    return skip("skipped: out of credits", "insufficient_credits", true);
+  }
+
+  await deps.store.expireStaleScoring(channel.id, new Date(now.getTime() - t.staleScoringMs));
+
+  const floor = automation.cursor ?? automation.enabledAt ?? now;
+  const threads: RawCommentThread[] = [];
+  try {
+    let pageToken: string | undefined;
+    do {
+      const page = await deps.youtube.listThreads(channel.channelId, pageToken);
+      pagesRead++;
+      const items = page.items ?? [];
+      threads.push(...items);
+      pageToken = page.nextPageToken;
+      // YouTube lists newest first: once a page reaches the cursor, the rest is older.
+      const reached =
+        items.length === 0 ||
+        items.some((th) => {
+          const at = Date.parse(th?.snippet?.topLevelComment?.snippet?.publishedAt ?? "");
+          return Number.isFinite(at) && at <= floor.getTime();
+        });
+      if (reached) break;
+    } while (pageToken && pagesRead < t.maxListPages);
+  } catch (err) {
+    const cls = deps.classifyListError(err);
+    if (cls.quota) {
+      try {
+        await deps.quota.trip();
+      } catch {
+        // Recording the breaker must not mask the skip itself.
+      }
+      return skip("skipped: quota breaker", "quota", true);
+    }
+    return skip("skipped: youtube error", cls.reason, false);
+  }
+
+  const { comments } = filterIngest(threads, { ownChannelId: channel.channelId, cursor: floor });
+  const ingested = comments.length > 0 ? await deps.store.insertComments(channel.id, comments) : 0;
+  let newest: Date | null = null;
+  for (const c of comments) if (!newest || c.publishedAt > newest) newest = c.publishedAt;
+  if (newest) await deps.store.advanceCursor(channel.id, newest);
+  return { status: "continue", reason: null, ingested, pagesRead };
+}
+
+/**
+ * Step 2..n of a sweep: claim up to `chunkSize` pending comments, score each
+ * once (1 credit, refunded on failure), store the scores, and pass matches
+ * to the chokepoint through `deps.apply` (I2–I6 live there).
+ *
+ * - A Jev failure (429/529/timeout after the SDK's retries) leaves the comment
+ *   `unscored`: never retried, never acted on.
+ * - Claimed comments whose call never started go back to `pending`.
+ * - Out of credits (scoring or the chokepoint) or the quota breaker ends
+ *   the run: the rest of the pending comments are dropped to `unscored` and
+ *   the cursor moves to now (missed windows are dropped).
+ * - Nothing left to claim ends the run `done`.
+ */
+export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Promise<SweepChunkResult> {
+  const t = tuning(deps);
+  const stepStartMs = deps.clock.now().getTime();
+  const counts = zeroCounts();
+  const end = async (status: SweepStatus, reason: string | null, dropWindow: boolean): Promise<SweepChunkResult> => {
+    const at = deps.clock.now();
+    if (dropWindow) {
+      counts.unscored += await deps.store.dropPending(channel.id);
+      await deps.store.advanceCursor(channel.id, at);
+    }
+    await deps.store.setRunStatus(channel.id, status, at);
+    return { status, reason, ...counts };
+  };
+
+  const organizationId = channel.organizationId;
+  if (!organizationId) return end("skipped: disabled", "no_organization", false);
+  const rubric = await deps.store.getPublishedRubric(channel.id);
+  if (!rubric) return end("skipped: no published rubric", null, false);
+  if (await deps.quota.isTripped()) return end("skipped: quota breaker", "quota_breaker", true);
+
+  const claimed = await deps.store.claimPending(channel.id, t.chunkSize);
+  if (claimed.length === 0) return end("done", null, false);
+  const rules = await deps.store.getRules(channel.id);
+
+  const batch = await scoreBatch(deps, organizationId, rubric, claimed, stepStartMs);
+  for (const { comment, result } of batch.scored) {
+    await deps.store.saveScore(channel.id, scoreRow(comment, result, rubric.version));
+  }
+  counts.scored = batch.scored.length;
+  counts.creditsCharged = batch.creditsCharged;
+  if (batch.failed.length > 0) {
+    await deps.store.markUnscored(channel.id, batch.failed.map((c) => c.id));
+    counts.unscored += batch.failed.length;
+  }
+  const waiting = [...batch.deferred, ...batch.notStarted];
+  if (batch.stop === "credits") {
+    // This run's window is dropped: the claimed rest go straight to unscored.
+    if (waiting.length > 0) {
+      await deps.store.markUnscored(channel.id, waiting.map((c) => c.id));
+      counts.unscored += waiting.length;
+    }
+  } else if (waiting.length > 0) {
+    await deps.store.unclaim(channel.id, waiting.map((c) => c.id));
+  }
+
+  const { decisions } = decide(rules, batch.scored, rubric.version);
+  counts.decisions = decisions.length;
+  const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
+  counts.applied = applied.applied;
+
+  if (batch.stop === "credits" || applied.halt === "credits") {
+    return end("skipped: out of credits", "insufficient_credits", true);
+  }
+  if (applied.halt === "quota") return end("skipped: quota breaker", "quota", true);
+  // Jev is unusable (no key / bad key): stop calling it; the comments wait, pending.
+  if (batch.stop === "jev") return end("done", "jev_unavailable", false);
+  return { status: "continue", reason: null, ...counts };
+}
+
+/**
+ * A whole sweep in one call: `sweepBegin`, then `sweepScoreChunk` until it
+ * reaches a terminal state or `maxChunks` (the rest stay pending for the next
+ * run). The workflow runs the same functions, one per step.
+ */
+export async function sweepChannel(
+  deps: SweepDeps,
+  channel: ChannelRef,
+  opts: { maxChunks?: number } = {}
+): Promise<SweepOutcome> {
+  const begin = await sweepBegin(deps, channel);
+  const out: SweepOutcome = {
+    status: "done",
+    reason: begin.reason,
+    ingested: begin.ingested,
+    pagesRead: begin.pagesRead,
+    chunks: 0,
+    ...zeroCounts(),
+  };
+  if (begin.status !== "continue") return { ...out, status: begin.status };
+  const maxChunks = opts.maxChunks ?? MAX_SWEEP_CHUNKS;
+  for (let i = 0; i < maxChunks; i++) {
+    const chunk = await sweepScoreChunk(deps, channel);
+    out.chunks++;
+    addCounts(out, chunk);
+    if (chunk.status !== "continue") {
+      out.status = chunk.status;
+      out.reason = chunk.reason;
+      return out;
+    }
+  }
+  await deps.store.setRunStatus(channel.id, "done", deps.clock.now());
+  return { ...out, status: "done", reason: "chunk_limit" };
+}
+
+/**
+ * One step of a reclassify run after `publishRubric` (Goal 3). Re-scores
+ * stored comments with version `version` — zero YouTube reads — and passes
+ * matches to the chokepoint.
+ *
+ * - `superseded`: `version` is no longer the published one; nothing is called.
+ * - `quota breaker` / `out of credits`: checked before any call, and after
+ *   the chokepoint halts on them.
+ * - I4: only never-actioned comments (none, flagged) get a decision; a held
+ *   comment that now matches no rule goes to `maybeRelease`; every other
+ *   state is scored and left alone.
+ * - A failed Jev call is refunded and leaves the old score in place.
+ * - `done` when no candidate is left. Pass `nextAfterId` to the next step.
+ */
+export async function reclassifyChunk(
+  deps: ReclassifyDeps,
+  channel: ChannelRef,
+  version: number,
+  afterId: string | null
+): Promise<ReclassifyChunkResult> {
+  const t = tuning(deps);
+  const stepStartMs = deps.clock.now().getTime();
+  const counts = zeroCounts();
+  const result = (
+    status: ReclassifyChunkResult["status"],
+    reason: string | null,
+    nextAfterId: string | null,
+    maybeRelease: string[] = []
+  ): ReclassifyChunkResult => ({ status, reason, nextAfterId, maybeRelease, ...counts });
+
+  const published = await deps.store.getPublishedRubric(channel.id);
+  if (!published || published.version !== version) return result("superseded", null, afterId);
+  const organizationId = channel.organizationId;
+  if (!organizationId) return result("out of credits", "no_organization", afterId);
+  if (await deps.quota.isTripped()) return result("quota breaker", null, afterId);
+  const balance = await deps.creditBalance(organizationId);
+  if (balance !== null && balance < SCORE_CREDITS) return result("out of credits", null, afterId);
+
+  const rows = await deps.store.listForReclassify(channel.id, version, afterId, t.chunkSize);
+  if (rows.length === 0) return result("done", null, afterId);
+  const rules = await deps.store.getRules(channel.id);
+
+  const batch = await scoreBatch(deps, organizationId, published, rows, stepStartMs);
+  for (const { comment, result: r } of batch.scored) {
+    await deps.store.saveScore(channel.id, scoreRow(comment, r, version));
+  }
+  counts.scored = batch.scored.length;
+  counts.unscored = batch.failed.length;
+  counts.creditsCharged = batch.creditsCharged;
+  // Resume after the last comment that was tried; rows past an untried one
+  // that did get a score are skipped next time by "no score for version".
+  const nextAfterId =
+    batch.firstUnfinished === -1
+      ? rows[rows.length - 1]!.id
+      : batch.firstUnfinished === 0
+        ? afterId
+        : rows[batch.firstUnfinished - 1]!.id;
+
+  const { decisions, maybeRelease } = decide(rules, batch.scored, version);
+  counts.decisions = decisions.length;
+  const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
+  counts.applied = applied.applied;
+
+  if (batch.stop === "credits" || applied.halt === "credits") {
+    return result("out of credits", null, nextAfterId, maybeRelease);
+  }
+  if (applied.halt === "quota") return result("quota breaker", null, nextAfterId, maybeRelease);
+  if (batch.stop === "jev") return result("done", "jev_unavailable", nextAfterId, maybeRelease);
+  return result("continue", null, nextAfterId, maybeRelease);
+}
+
+/**
+ * Scores up to `DRY_RUN_MAX_COMMENTS` stored comments with a draft rubric and
+ * counts what `rules` would do. 1 credit per comment scored (refunded when
+ * the call fails); no YouTube call, no stored score, no other store access.
+ * `perRule` counts each rule on its own; `byAction` applies I3 across them.
+ */
+export async function dryRun(
+  deps: DryRunDeps,
+  channel: ChannelRef,
+  rubric: ScoringRubric,
+  rules: readonly ModerationRule[],
+  opts: { limit?: number } = {}
+): Promise<DryRunResult> {
+  const stepStartMs = deps.clock.now().getTime();
+  const byAction: Record<ModerationAction, number> = { flag: 0, hold: 0, reject: 0, ban: 0, delete: 0 };
+  const empty: DryRunResult = {
+    sampled: 0,
+    scored: 0,
+    unscored: 0,
+    creditsCharged: 0,
+    stoppedReason: null,
+    perRule: rules.map((r) => ({
+      ruleId: r.id ?? null,
+      label: r.label,
+      threshold: r.threshold,
+      action: r.action,
+      wouldFire: 0,
+    })),
+    byAction,
+    choices: {},
+    model: null,
+  };
+  if (!channel.organizationId) return { ...empty, stoppedReason: "out of credits" };
+  const limit = Math.max(0, Math.min(opts.limit ?? DRY_RUN_MAX_COMMENTS, DRY_RUN_MAX_COMMENTS));
+  const rows = limit > 0 ? await deps.store.listForDryRun(channel.id, limit) : [];
+  const batch = await scoreBatch(deps, channel.organizationId, rubric, rows, stepStartMs);
+
+  const choices: Record<string, number> = {};
+  for (const { result } of batch.scored) {
+    choices[result.choice] = (choices[result.choice] ?? 0) + 1;
+    const winner = evaluateRules(rules, result.probabilities).action;
+    if (winner) byAction[winner]++;
+    empty.perRule.forEach((count, i) => {
+      if (evaluateRules([rules[i]!], result.probabilities).action) count.wouldFire++;
+    });
+  }
+  return {
+    ...empty,
+    sampled: rows.length,
+    scored: batch.scored.length,
+    unscored: batch.failed.length + batch.deferred.length,
+    creditsCharged: batch.creditsCharged,
+    stoppedReason:
+      batch.stop === "credits"
+        ? "out of credits"
+        : batch.stop === "time"
+          ? "time budget"
+          : batch.stop === "jev"
+            ? "jev unavailable"
+            : null,
+    choices,
+    model: batch.model,
+  };
 }

@@ -104,3 +104,36 @@ credit helpers exported from `src/lib/services/comments.ts`):
 a temporary file under `src/lib/moderation/` importing
 `setCommentModerationStatus as s` through a relative path, with a NUL byte in
 it, failed 3 of its 8 tests; the file was then removed.
+
+### Phase 3 — 2026-09-29
+
+**Red** (stub `sweepBegin` / `sweepScoreChunk` / `sweepChannel` /
+`reclassifyChunk` / `dryRun` in `core.ts` returning empty terminal results;
+stub `jev.ts` whose port always returns `not_configured`):
+
+| File | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `comment-sweep.mjs` | 19 | 1 | 18 |
+| `comment-rules.mjs` | 18 | 14 | 4 |
+| `npm run test:unit` total | 141 | 119 | 22 |
+
+The one sweep pass is "a missing TYPESAFE_API_KEY is `not_configured`",
+which the stub adapter returns by construction. The 14 rules passes are the
+phase-1 tests; the 4 new reclassify tests (Proof #3) fail.
+
+**Green** (sweep, reclassify and dry run in `src/lib/moderation/core.ts`,
+the Jev adapter in `src/lib/moderation/jev.ts`, Drizzle adapters in
+`store.ts` / `deps.ts`, `service.ts`, `queries.ts`, the workflows
+`src/workflows/comment-sweep.ts` / `comment-reclassify.ts` and the cron
+route `src/app/api/workflows/comment-sweep/route.ts`):
+
+| File | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `comment-sweep.mjs` | 19 | 19 | 0 |
+| `comment-rules.mjs` | 18 | 18 | 0 |
+| `npm run test:unit` total | 141 | 141 | 0 |
+
+`npm run test:org-guards`, `npm run test:docs-coverage` and
+`npx tsc --noEmit -p .` pass. The chokepoint test still covers the new files:
+a temporary `deleteComment` import added to `src/lib/moderation/deps.ts`
+failed 2 of its 8 tests, and was then removed.

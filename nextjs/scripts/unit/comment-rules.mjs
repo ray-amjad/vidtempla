@@ -1,5 +1,6 @@
-// #156 Proof #1 (Goal 2, I3): the rule evaluator.
-// The reclassify case (Proof #3) is added to this file in phase 3.
+// #156 Proof #1 (Goal 2, I3): the rule evaluator, and Proof #3 (I4, Goal 3):
+// reclassify never acts on an actioned comment, and held comments that now
+// score clean land on the maybe-release list.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -11,6 +12,7 @@ const {
   evaluateRules,
   validateRules,
   pacificDayKey,
+  reclassifyChunk,
 } = await import("../../src/lib/moderation/core.ts");
 
 // ─── spam-comments.txt at the repo root: entries separated by a `---` line ──
@@ -195,4 +197,196 @@ test("pacificDayKey rolls over at midnight Pacific, DST-correct", () => {
   assert.equal(pacificDayKey(new Date("2026-11-01T07:00:00Z")), "2026-11-01");
   assert.equal(pacificDayKey(new Date("2026-11-02T07:59:59Z")), "2026-11-01");
   assert.equal(pacificDayKey(new Date("2026-11-02T08:00:00Z")), "2026-11-02");
+});
+
+// ─── Proof #3: reclassify (I4) ───────────────────────────────────────────────
+
+const RC_CHANNEL = { id: "ch-uuid", channelId: "UCownchannel0000000000000", organizationId: "org-1" };
+const RC_LABELS = ["spam", "self-promotion", "scam", "abusive", "normal"].map((name) => ({
+  name,
+  description: `${name} description`,
+}));
+
+/**
+ * Fakes for reclassifyChunk. The store deliberately returns every comment,
+ * whatever its state, so the test proves core's own I4 input filter rather
+ * than the SQL. `v2` is what the new rubric scores each comment as.
+ */
+function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules } = {}) {
+  let nowMs = Date.parse("2026-09-29T18:00:00Z");
+  const events = [];
+  const applyCalls = [];
+  const scores = [];
+  const jevCalls = [];
+  const youtubeReads = [];
+  const deps = {
+    clock: { now: () => new Date(nowMs) },
+    sleep: async (ms) => {
+      nowMs += Math.max(0, ms);
+    },
+    credits: {
+      async charge(_org, amount) {
+        if (balance < amount) return { outcome: "insufficient", refundable: 0 };
+        balance -= amount;
+        events.push(["charge", amount]);
+        return { outcome: "ok", refundable: amount };
+      },
+      async refund(_org, c) {
+        balance += c.refundable;
+        events.push(["refund", c.refundable]);
+      },
+    },
+    creditBalance: async () => balance,
+    quota: { isTripped: async () => tripped, trip: async () => {} },
+    youtube: {
+      async listThreads(...args) {
+        youtubeReads.push(args);
+        return { items: [] };
+      },
+    },
+    classifyListError: () => ({ quota: false, reason: "x" }),
+    jev: {
+      async choose(req) {
+        jevCalls.push(req);
+        const row = rows.find((r) => r.text === req.state.comment);
+        const probs = v2[row.id];
+        return {
+          ok: true,
+          result: { model: "jev-1.14", choice: "x", probabilities: probs, confidence: 0.9, inputTokens: 50, outputTokens: 1 },
+        };
+      },
+    },
+    store: {
+      getPublishedRubric: async () => ({ version: published, labels: RC_LABELS, instructions: "", examples: [] }),
+      getRules: async () =>
+        rules ?? [
+          { id: "r-hold", label: "spam", threshold: 0.7, action: "hold" },
+          { id: "r-del", label: "spam", threshold: 0.9, action: "delete" },
+        ],
+      async listForReclassify(_ch, version, afterId, limit) {
+        return rows
+          .filter((r) => afterId === null || r.id > afterId)
+          .filter((r) => !scores.some((s) => s.commentId === r.id && s.rubricVersion === version))
+          .sort((a, b) => (a.id < b.id ? -1 : 1))
+          .slice(0, limit)
+          .map((r) => ({ ...r, videoTitle: null }));
+      },
+      async saveScore(_ch, score) {
+        scores.push(score);
+      },
+      async setRunStatus() {},
+    },
+    apply: {
+      async apply(_channel, decisions) {
+        applyCalls.push(decisions);
+        return {
+          outcomes: decisions.map((d) => ({ commentId: d.commentId, status: "applied", appliedAction: d.action })),
+          refused: [],
+          halted: null,
+          paused: [],
+          youtubeCalls: decisions.length,
+        };
+      },
+    },
+  };
+  return { deps, events, applyCalls, scores, jevCalls, youtubeReads, balance: () => balance };
+}
+
+const SPAMMY = { spam: 0.96, normal: 0.02 };
+const CLEAN = { spam: 0.2, normal: 0.8 };
+
+function rcRow(id, moderationState, over = {}) {
+  return {
+    id,
+    youtubeChannelId: RC_CHANNEL.id,
+    commentId: `yt-${id}`,
+    parentId: null,
+    videoId: "vid-1",
+    authorChannelId: `UCviewer-${id}`,
+    text: `text of ${id}`,
+    textSource: "display",
+    scoreStatus: "scored",
+    moderationState,
+    ...over,
+  };
+}
+
+test("Proof #3: reclassify decides only for never-actioned comments; held + now clean → maybe release", async () => {
+  const rows = [
+    rcRow("a-none-spam", "none"),
+    rcRow("b-held-clean", "held"),
+    rcRow("c-rejected-spam", "rejected"),
+    rcRow("d-flagged-spam", "flagged"),
+    rcRow("e-held-spam", "held"),
+    rcRow("f-deleted-spam", "deleted"),
+    rcRow("g-released-clean", "released"),
+    rcRow("h-banned-clean", "banned"),
+    rcRow("i-none-clean", "none"),
+  ];
+  const v2 = {
+    "a-none-spam": SPAMMY,
+    "b-held-clean": CLEAN,
+    "c-rejected-spam": SPAMMY,
+    "d-flagged-spam": SPAMMY,
+    "e-held-spam": SPAMMY,
+    "f-deleted-spam": SPAMMY,
+    "g-released-clean": CLEAN,
+    "h-banned-clean": CLEAN,
+    "i-none-clean": CLEAN,
+  };
+  const h = reclassifyHarness({ rows, v2 });
+  const res = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+
+  const decided = h.applyCalls.flat();
+  // Only the never-actioned spam comments get a decision (flag is not actioned).
+  assert.deepEqual(
+    decided.map((d) => [d.commentId, d.action, d.rubricVersion]).sort(),
+    [
+      ["a-none-spam", "delete", 2],
+      ["d-flagged-spam", "delete", 2],
+    ]
+  );
+  // Actioned comments get no decision, whatever they now score.
+  for (const id of ["b-held-clean", "c-rejected-spam", "e-held-spam", "f-deleted-spam", "g-released-clean", "h-banned-clean"]) {
+    assert.ok(!decided.some((d) => d.commentId === id), `${id} must not be acted on`);
+  }
+  // Held and now clean → maybe release. Held and still spam → not listed.
+  assert.deepEqual(res.maybeRelease, ["b-held-clean"]);
+  assert.equal(res.decisions, 2);
+  assert.equal(h.youtubeReads.length, 0, "reclassify makes zero YouTube reads");
+  assert.ok(["continue", "done"].includes(res.status));
+});
+
+test("Proof #3: reclassify stores a new score per comment and charges 1 credit each", async () => {
+  const rows = [rcRow("a", "none"), rcRow("b", "held")];
+  const h = reclassifyHarness({ rows, v2: { a: CLEAN, b: CLEAN } });
+  let res = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  let guard = 0;
+  while (res.status === "continue" && guard++ < 5) res = await reclassifyChunk(h.deps, RC_CHANNEL, 2, res.nextAfterId);
+  assert.equal(res.status, "done");
+  assert.deepEqual(h.scores.map((s) => [s.commentId, s.rubricVersion, s.model]), [
+    ["a", 2, "jev-1.14"],
+    ["b", 2, "jev-1.14"],
+  ]);
+  assert.deepEqual(h.events, [["charge", 1], ["charge", 1]]);
+});
+
+test("reclassify stops `superseded` when a newer version is published, before any call", async () => {
+  const h = reclassifyHarness({ rows: [rcRow("a", "none")], v2: { a: SPAMMY }, published: 3 });
+  const res = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.equal(res.status, "superseded");
+  assert.equal(h.jevCalls.length, 0);
+  assert.deepEqual(h.events, []);
+  assert.equal(h.applyCalls.length, 0);
+});
+
+test("reclassify ends `out of credits` and `quota breaker` without acting", async () => {
+  const broke = reclassifyHarness({ rows: [rcRow("a", "none")], v2: { a: SPAMMY }, balance: 0 });
+  assert.equal((await reclassifyChunk(broke.deps, RC_CHANNEL, 2, null)).status, "out of credits");
+  assert.equal(broke.jevCalls.length, 0);
+
+  const tripped = reclassifyHarness({ rows: [rcRow("a", "none")], v2: { a: SPAMMY }, tripped: true });
+  assert.equal((await reclassifyChunk(tripped.deps, RC_CHANNEL, 2, null)).status, "quota breaker");
+  assert.equal(tripped.jevCalls.length, 0);
+  assert.equal(tripped.applyCalls.length, 0);
 });
