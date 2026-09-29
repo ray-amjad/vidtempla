@@ -290,6 +290,11 @@ export interface ApplyOutcome {
   editId: string | null;
   /** Net credits billed for this comment (0 after a refund). */
   creditsCharged: number;
+  /**
+   * A YouTube write was sent for this comment (it may have landed). False for
+   * flags, the production gate, and anything halted before its call.
+   */
+  youtubeAttempted: boolean;
 }
 
 export interface ApplyRefusal {
@@ -439,8 +444,24 @@ export interface ScoringRubric extends Rubric {
 export interface AutomationState {
   enabled: boolean;
   enabledAt: Date | null;
-  /** Comments published at or before this are not ingested. */
+  /** Comments published before this are not ingested (the same second is, deduped by id). */
   cursor: Date | null;
+  /** Page token the next listing resumes from, after a page-limit stop before the cursor. */
+  listingPageToken?: string | null;
+  /** The newest comment seen by the listing being resumed. */
+  listingNewest?: Date | null;
+}
+
+/** A listing stopped at its page limit before it reached the cursor. */
+export interface ListingResume {
+  pageToken: string;
+  newest: Date | null;
+}
+
+/** A stored score of the published version whose decision is still owed. */
+export interface UndecidedScore {
+  comment: ScoringComment;
+  probabilities: LabelProbabilities;
 }
 
 /** A stored comment plus what Jev's state needs besides its text. */
@@ -468,6 +489,8 @@ export interface SweepStore {
   getRules(youtubeChannelId: string): Promise<ModerationRule[]>;
   /** Moves the cursor forward only; a `to` at or before the current cursor is a no-op. */
   advanceCursor(youtubeChannelId: string, to: Date): Promise<void>;
+  /** Records (or, with null, clears) where the next listing resumes. */
+  setListingResume(youtubeChannelId: string, resume: ListingResume | null): Promise<void>;
   /** Inserts comments as `pending`; an already-stored comment id is skipped. Returns the inserted count. */
   insertComments(youtubeChannelId: string, comments: readonly IngestComment[]): Promise<number>;
   /** `scoring` rows claimed before `claimedBefore` → `unscored` (a killed step). */
@@ -496,6 +519,15 @@ export interface SweepStore {
     afterId: string | null,
     limit: number
   ): Promise<ScoringComment[]>;
+  /**
+   * Scores of `version` still owed a decision (`decided_at` null) on scored
+   * comments in state none or flagged, oldest first. A comment with an
+   * `applied` or `unknown` action-log row is left out: something may already
+   * have reached YouTube for it (I4).
+   */
+  listUndecided(youtubeChannelId: string, version: number, limit: number): Promise<UndecidedScore[]>;
+  /** Stamps `decided_at` on these comments' `version` scores (first time only). */
+  markDecided(youtubeChannelId: string, commentIds: readonly string[], version: number): Promise<void>;
   /** The most recent stored, scored, not-deleted comments, for a dry run. */
   listForDryRun(youtubeChannelId: string, limit: number): Promise<ScoringComment[]>;
   setRunStatus(youtubeChannelId: string, status: SweepStatus, at: Date): Promise<void>;
@@ -552,8 +584,12 @@ export interface SweepDeps extends ScoringDeps {
   creditBalance(organizationId: string): Promise<number | null>;
   quota: QuotaBreaker;
   youtube: YouTubeCommentReader;
-  /** How a thrown listing error should be treated (quota trips the breaker). */
-  classifyListError(err: unknown): { quota: boolean; reason: string };
+  /**
+   * How a thrown listing error should be treated (quota trips the breaker).
+   * `badPageToken`: YouTube refused the page token (a stored resume token
+   * that no longer works).
+   */
+  classifyListError(err: unknown): { quota: boolean; reason: string; badPageToken?: boolean };
   store: SweepStore;
   apply: ApplyPort;
 }
@@ -562,7 +598,7 @@ export type ReclassifyDeps = ScoringDeps & {
   creditBalance(organizationId: string): Promise<number | null>;
   quota: QuotaBreaker;
   apply: ApplyPort;
-  store: Pick<SweepStore, "getPublishedRubric" | "getRules" | "listForReclassify" | "saveScore">;
+  store: Pick<SweepStore, "getPublishedRubric" | "getRules" | "listForReclassify" | "saveScore" | "markDecided">;
 };
 
 export type DryRunDeps = ScoringDeps & {

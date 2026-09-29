@@ -2,7 +2,13 @@ import { start } from "workflow/api";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { commentAutomation, youtubeChannels } from "@/db/schema";
-import { MAX_SWEEP_CHUNKS, STALE_SCORING_MS, sweepBegin, sweepScoreChunk } from "@/lib/moderation/core";
+import {
+  MAX_SWEEP_CHUNKS,
+  STALE_SCORING_MS,
+  sweepBegin,
+  sweepDecideBacklog,
+  sweepScoreChunk,
+} from "@/lib/moderation/core";
 import { sweepDeps } from "@/lib/moderation/deps";
 import { drizzleSweepStore } from "@/lib/moderation/store";
 import type { ChannelRef, SweepBeginResult, SweepChunkResult } from "@/lib/moderation/types";
@@ -11,8 +17,9 @@ import type { ChannelRef, SweepBeginResult, SweepChunkResult } from "@/lib/moder
  * #156 comment sweep, every 15 minutes (vercel.json). Fans out one
  * `commentSweepChannelWorkflow` per enabled channel that belongs to an org.
  *
- * Each channel run is: one ingest step (`sweepBegin`), then score + apply
- * steps (`sweepScoreChunk`) until a terminal state. Every step catches its own
+ * Each channel run is: one ingest step (`sweepBegin`), one step for
+ * decisions still owed by earlier runs (`sweepDecideBacklog`), then score +
+ * apply steps (`sweepScoreChunk`) until a terminal state. Every step catches its own
  * errors and returns a status, so the runtime never retries a step that has
  * already charged credits, stored scores or called YouTube. A step killed
  * mid-way leaves its claimed rows in `scoring`; the next run's ingest step
@@ -38,9 +45,14 @@ export async function commentSweepChannelWorkflow(youtubeChannelUuid: string) {
     return { channelId: youtubeChannelUuid, status: begin.status, reason: begin.reason, chunks: 0 };
   }
 
+  const backlog = await sweepBacklogStep(youtubeChannelUuid);
+  if (backlog.status !== "continue") {
+    return { channelId: youtubeChannelUuid, status: backlog.status, reason: backlog.reason, chunks: 0, applied: backlog.applied };
+  }
+
   let chunks = 0;
   let scored = 0;
-  let applied = 0;
+  let applied = backlog.applied;
   while (chunks < MAX_SWEEP_CHUNKS) {
     const chunk = await sweepChunkStep(youtubeChannelUuid);
     chunks++;
@@ -122,6 +134,23 @@ async function sweepChunkStep(youtubeChannelUuid: string): Promise<SweepChunkRes
     });
     await recordStatus(youtubeChannelUuid, "done");
     return { status: "done", reason: "step_error", ...zero };
+  }
+}
+
+async function sweepBacklogStep(youtubeChannelUuid: string): Promise<SweepChunkResult> {
+  "use step";
+
+  const zero = { scored: 0, unscored: 0, creditsCharged: 0, decisions: 0, applied: 0 };
+  try {
+    const channel = await loadChannel(youtubeChannelUuid);
+    if (!channel) return { status: "skipped: disabled", reason: "channel_not_found", ...zero };
+    return await sweepDecideBacklog(sweepDeps(channel), channel);
+  } catch (err) {
+    // Never rethrow: a retried step would apply again. Scores whose decision
+    // was not stamped stay owed; the action log keeps I4 for any that landed.
+    console.error("[comment-sweep] decision backlog step failed", { channelId: youtubeChannelUuid, error: errorName(err) });
+    // New comments can still be scored this run.
+    return { status: "continue", reason: "step_error", ...zero };
   }
 }
 

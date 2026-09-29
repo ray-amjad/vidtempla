@@ -106,7 +106,7 @@ test("a thread about the channel (no videoId) is dropped with its replies", () =
   assert.equal(r.dropped.aboutChannel, 2);
 });
 
-test("comments at or before the cursor are dropped; later ones, including new replies on old threads, are kept", () => {
+test("comments before the cursor are dropped; at or after it (same-second edge, R1 #3), including new replies on old threads, are kept", () => {
   const cursor = new Date("2026-09-29T12:00:00Z");
   const r = filterIngest(
     [
@@ -121,8 +121,10 @@ test("comments at or before the cursor are dropped; later ones, including new re
     ],
     opts({ cursor })
   );
-  assert.deepEqual(ids(r).sort(), ["new", "old.r-new"]);
-  assert.equal(r.dropped.beforeCursor, 3);
+  // Inclusive at the cursor: a comment in the cursor's own second may have
+  // been listed after the run that set it. Stored ids are deduped on insert.
+  assert.deepEqual(ids(r).sort(), ["equal", "new", "old.r-equal", "old.r-new"]);
+  assert.equal(r.dropped.beforeCursor, 1);
 });
 
 test("a null cursor keeps everything", () => {

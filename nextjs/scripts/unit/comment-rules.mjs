@@ -213,7 +213,8 @@ const RC_LABELS = ["spam", "self-promotion", "scam", "abusive", "normal"].map((n
  * whatever its state, so the test proves core's own I4 input filter rather
  * than the SQL. `v2` is what the new rubric scores each comment as.
  */
-function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules } = {}) {
+function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped = false, rules, outcomeFor } = {}) {
+  const decided = [];
   let nowMs = Date.parse("2026-09-29T18:00:00Z");
   const events = [];
   const applyCalls = [];
@@ -275,13 +276,18 @@ function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped =
       async saveScore(_ch, score) {
         scores.push(score);
       },
+      async markDecided(_ch, ids, version) {
+        for (const id of ids) decided.push([id, version]);
+      },
       async setRunStatus() {},
     },
     apply: {
       async apply(_channel, decisions) {
         applyCalls.push(decisions);
         return {
-          outcomes: decisions.map((d) => ({ commentId: d.commentId, status: "applied", appliedAction: d.action })),
+          outcomes: decisions.map(
+            (d) => outcomeFor?.(d) ?? { commentId: d.commentId, status: "applied", appliedAction: d.action, youtubeAttempted: true }
+          ),
           refused: [],
           halted: null,
           paused: [],
@@ -290,7 +296,7 @@ function reclassifyHarness({ rows, v2, published = 2, balance = 1_000, tripped =
       },
     },
   };
-  return { deps, events, applyCalls, scores, jevCalls, youtubeReads, balance: () => balance };
+  return { deps, events, applyCalls, scores, jevCalls, youtubeReads, decided, balance: () => balance };
 }
 
 const SPAMMY = { spam: 0.96, normal: 0.02 };
@@ -428,4 +434,22 @@ test("R1 #5: reclassify lists a held comment whose only match is a flag rule as 
   const res = await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
   assert.deepEqual(res.maybeRelease, ["a-held-flag"]);
   assert.equal(h.applyCalls.flat().length, 0, "I4: held comments get no decision");
+});
+
+test("R1 #4: reclassify marks a score decided only once its decision was attempted", async () => {
+  const rows = [rcRow("a-started", "none"), rcRow("b-not-started", "none"), rcRow("c-clean", "none"), rcRow("d-held", "held")];
+  const h = reclassifyHarness({
+    rows,
+    v2: { "a-started": SPAMMY, "b-not-started": SPAMMY, "c-clean": CLEAN, "d-held": CLEAN },
+    outcomeFor: (d) =>
+      d.commentId === "b-not-started"
+        ? { commentId: d.commentId, status: "failed", error: "timeBudget", appliedAction: d.action, youtubeAttempted: false }
+        : undefined,
+  });
+  await reclassifyChunk(h.deps, RC_CHANNEL, 2, null);
+  assert.deepEqual(
+    h.decided.map(([id, v]) => `${id}@${v}`).sort(),
+    ["a-started@2", "c-clean@2", "d-held@2"],
+    "the unstarted decision stays open for the next sweep"
+  );
 });

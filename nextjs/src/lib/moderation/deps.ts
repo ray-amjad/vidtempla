@@ -104,7 +104,7 @@ function youtubeReader(channel: ChannelRef): YouTubeCommentReader {
   };
 }
 
-function classifyListError(err: unknown): { quota: boolean; reason: string } {
+function classifyListError(err: unknown): { quota: boolean; reason: string; badPageToken?: boolean } {
   if (isYouTubeQuotaError(err)) return { quota: true, reason: "youtube_quota" };
   if (isYouTubeInvalidGrantError(err)) return { quota: false, reason: "youtube_auth" };
   if (isYouTubeRateLimitError(err)) return { quota: false, reason: "youtube_rate_limited" };
@@ -117,6 +117,8 @@ function classifyListError(err: unknown): { quota: boolean; reason: string } {
   return {
     quota: false,
     reason: detail.upstreamStatus ? `youtube_http_${detail.upstreamStatus}` : "youtube_unreachable",
+    // A stored resume token YouTube no longer accepts (400 invalidPageToken).
+    badPageToken: detail.upstreamStatus === 400 && detail.reasons.includes("invalidPageToken"),
   };
 }
 

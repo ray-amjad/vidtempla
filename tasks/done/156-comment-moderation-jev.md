@@ -226,3 +226,15 @@ code first, then the fix went in and the whole suite ran green.
 | #1 ledger error read as out of credits | 3 in `scripts/unit/comment-sweep.mjs` (`R1 #1 …`) | 3 / 3 | 3 / 3 |
 | #5 "maybe release" always empty | 2 in `scripts/unit/comment-rules.mjs` (`R1 #5 …`) | 2 / 2 | 2 / 2 |
 | #2 bulk-update phase 0 reconciles moderation snapshots | 1 static check in `scripts/unit/moderation-chokepoint.mjs` (`R1 #2 …`; the logic is a SQL filter in `services/comments.ts`, which the strip-types runner cannot import) | 1 / 1 | 1 / 1 |
+| #3 cursor skips unread pages; same-second edge | 2 in `comment-sweep.mjs` (`R1 #3 …`) + the `filterIngest` cursor test in `comment-ingest.mjs` rewritten to the inclusive contract | 3 / 3 | 3 / 3 |
+| #4 decisions that never start are lost | 3 in `comment-sweep.mjs` (time budget, chokepoint throw, backlog uses only the published version) + 1 in `comment-rules.mjs` (reclassify stamps only started decisions) | 4 / 4 | 4 / 4 |
+| #4 guards (no double action) | 3 in `comment-sweep.mjs`: a definitive 4xx and an ambiguous 5xx are not re-sent; an owed decision the balance cannot pay waits while new comments are still scored | 0 / 3 (they pin behaviour the fix must keep) | 3 / 3 |
+
+Schema: migration `drizzle/0025_jazzy_raza.sql` adds
+`comment_automation.listing_page_token`, `comment_automation.listing_newest`,
+`comment_scores.decided_at` (backfilled to `created_at`) and the partial index
+`comment_scores_undecided_idx`.
+
+Gates after the round (from `nextjs/`): `npm run test:unit` 160 / 160,
+`npm run test:org-guards` pass, `npm run test:docs-coverage` 47/47/14 pass,
+`npx tsc --noEmit -p .` clean.

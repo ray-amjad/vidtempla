@@ -717,9 +717,17 @@ export const commentAutomation = pgTable("comment_automation", {
   enabled: boolean("enabled").notNull().default(false),
   // Scoring starts here; comments posted before enable are never imported.
   enabledAt: timestamp("enabled_at", { mode: "date", withTimezone: true }),
-  // Comments published at or before this instant are not ingested. Advances
-  // to now after a credit or quota skip, so missed windows are dropped.
+  // Comments published before this instant are not ingested (one in the same
+  // second is, and deduped by id). Advances to now after a credit or quota
+  // skip, so missed windows are dropped.
   cursor: timestamp("cursor", { mode: "date", withTimezone: true }),
+  // Set when the listing stopped at its page limit before reaching the
+  // cursor: the YouTube page token the next run resumes from, so the older
+  // comments are still read. The cursor stays put until they are.
+  listingPageToken: text("listing_page_token"),
+  // The newest comment seen by the listing being resumed; the cursor moves
+  // here once the resumed listing reaches the old cursor.
+  listingNewest: timestamp("listing_newest", { mode: "date", withTimezone: true }),
   // Set when today's automatic reject+ban (or delete) cap is hit; matches
   // then degrade to hold until an owner or admin resumes.
   pausedRejectBan: boolean("paused_reject_ban").notNull().default(false),
@@ -819,11 +827,18 @@ export const commentScores = pgTable(
     confidence: real("confidence"),
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),
+    // When this score's rule decision was taken up (evaluated, and any match
+    // attempted by the chokepoint). Null = still owed a decision: the next
+    // sweep re-evaluates it if this is the published version.
+    decidedAt: timestamp("decided_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => ({
+    undecidedIdx: index("comment_scores_undecided_idx")
+      .on(table.youtubeChannelId, table.rubricVersion)
+      .where(sql`${table.decidedAt} IS NULL`),
     uniqueCommentVersion: unique("comment_scores_comment_version_unique").on(
       table.commentId,
       table.rubricVersion

@@ -13,6 +13,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, notExists, or, sql } f
 import { db } from "@/db";
 import {
   commentAutomation,
+  commentModerationActions,
   commentModerationRules,
   commentRubrics,
   commentScores,
@@ -20,6 +21,7 @@ import {
   youtubeVideos,
 } from "@/db/schema";
 import type {
+  LabelProbabilities,
   ModerationAction,
   ModerationRule,
   ModerationState,
@@ -114,6 +116,8 @@ export const drizzleSweepStore: SweepStore = {
         enabled: commentAutomation.enabled,
         enabledAt: commentAutomation.enabledAt,
         cursor: commentAutomation.cursor,
+        listingPageToken: commentAutomation.listingPageToken,
+        listingNewest: commentAutomation.listingNewest,
       })
       .from(commentAutomation)
       .where(eq(commentAutomation.youtubeChannelId, youtubeChannelId));
@@ -163,6 +167,17 @@ export const drizzleSweepStore: SweepStore = {
           or(isNull(commentAutomation.cursor), lt(commentAutomation.cursor, to))
         )
       );
+  },
+
+  async setListingResume(youtubeChannelId, resume) {
+    await db
+      .update(commentAutomation)
+      .set({
+        listingPageToken: resume ? resume.pageToken : null,
+        listingNewest: resume ? resume.newest : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(commentAutomation.youtubeChannelId, youtubeChannelId));
   },
 
   async insertComments(youtubeChannelId, comments) {
@@ -329,6 +344,64 @@ export const drizzleSweepStore: SweepStore = {
       .orderBy(asc(youtubeComments.id))
       .limit(limit);
     return withVideoTitles(youtubeChannelId, rows);
+  },
+
+  async listUndecided(youtubeChannelId, version, limit) {
+    if (limit <= 0) return [];
+    const rows = await db
+      .select({ ...COMMENT_COLUMNS, probabilities: commentScores.probabilities })
+      .from(commentScores)
+      .innerJoin(youtubeComments, eq(youtubeComments.id, commentScores.commentId))
+      .where(
+        and(
+          eq(commentScores.youtubeChannelId, youtubeChannelId),
+          eq(commentScores.rubricVersion, version),
+          isNull(commentScores.decidedAt),
+          channelComments(youtubeChannelId),
+          eq(youtubeComments.scoreStatus, "scored"),
+          inArray(youtubeComments.moderationState, ["none", "flagged"]),
+          // An attempt for this version that landed or may have landed: never
+          // redo it (I4), even if decided_at was never stamped (killed step).
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(commentModerationActions)
+              .where(
+                and(
+                  eq(commentModerationActions.youtubeChannelId, youtubeChannelId),
+                  eq(commentModerationActions.commentId, youtubeComments.id),
+                  eq(commentModerationActions.rubricVersion, version),
+                  inArray(commentModerationActions.status, ["applied", "unknown"])
+                )
+              )
+          )
+        )
+      )
+      .orderBy(asc(commentScores.createdAt))
+      .limit(limit);
+    const comments = await withVideoTitles(
+      youtubeChannelId,
+      rows.map(({ probabilities: _p, ...r }) => r)
+    );
+    return comments.map((comment, i) => ({
+      comment,
+      probabilities: (rows[i]!.probabilities ?? {}) as LabelProbabilities,
+    }));
+  },
+
+  async markDecided(youtubeChannelId, commentIds, version) {
+    if (commentIds.length === 0) return;
+    await db
+      .update(commentScores)
+      .set({ decidedAt: new Date() })
+      .where(
+        and(
+          eq(commentScores.youtubeChannelId, youtubeChannelId),
+          eq(commentScores.rubricVersion, version),
+          inArray(commentScores.commentId, [...commentIds]),
+          isNull(commentScores.decidedAt)
+        )
+      );
   },
 
   async listForDryRun(youtubeChannelId, limit) {

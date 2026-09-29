@@ -49,6 +49,7 @@ import type {
   DryRunResult,
   JevCallResult,
   JevChoiceResult,
+  ListingResume,
   ReclassifyChunkResult,
   ReclassifyDeps,
   ScoreInsert,
@@ -62,6 +63,8 @@ import type {
   SweepDeps,
   SweepOutcome,
   SweepStatus,
+  SweepStore,
+  UndecidedScore,
 } from "./types";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -280,9 +283,11 @@ type RawSnippet = RawCommentThread["snippet"]["topLevelComment"]["snippet"] & {
  *   or reply. A viewer reply inside the owner's own thread is kept.
  * - A thread with no `videoId` is about the channel, not on one of its
  *   videos; the channel cannot moderate it, so it is dropped with its replies.
- * - A comment published at or before `cursor` was already swept (or predates
+ * - A comment published before `cursor` was already swept (or predates
  *   enable) and is dropped — per comment, so a new reply on an old thread is
- *   still kept.
+ *   still kept. The cursor's own instant is kept: a comment in the same second
+ *   may have been listed after the run that set the cursor. Already-stored
+ *   ids are deduped (here via `knownCommentIds`, and by the insert).
  * - Duplicate ids (within the batch, or in `knownCommentIds`) are dropped.
  * - A comment with no id or an unparseable `publishedAt` is dropped as
  *   malformed; this never throws.
@@ -325,7 +330,7 @@ export function filterIngest(
       dropped.ownChannel++;
       return;
     }
-    if (cursorMs !== null && publishedAt.getTime() <= cursorMs) {
+    if (cursorMs !== null && publishedAt.getTime() < cursorMs) {
       dropped.beforeCursor++;
       return;
     }
@@ -641,6 +646,7 @@ export async function applyDecisions(deps: ApplyDeps, input: ApplyInput): Promis
     rubricVersion: it.d.rubricVersion,
     editId: it.editId,
     creditsCharged: it.charge && it.status !== "skipped_non_production" ? it.charge.refundable : 0,
+    youtubeAttempted: it.attempts > 0,
   });
 
   /** Hands finished items to the store (action log + moderation_state). */
@@ -1146,14 +1152,14 @@ function neverActioned(state: ModerationState): boolean {
  */
 function decide(
   rules: readonly ModerationRule[],
-  scored: ScoreBatch["scored"],
+  scored: readonly UndecidedScore[],
   rubricVersion: number
 ): { decisions: SweepDecision[]; maybeRelease: string[] } {
   const decisions: SweepDecision[] = [];
   const maybeRelease: string[] = [];
-  for (const { comment, result } of scored) {
-    const evaluation = evaluateRules(rules, result.probabilities);
-    if (isMaybeRelease(comment.moderationState, rules, result.probabilities)) {
+  for (const { comment, probabilities } of scored) {
+    const evaluation = evaluateRules(rules, probabilities);
+    if (isMaybeRelease(comment.moderationState, rules, probabilities)) {
       maybeRelease.push(comment.id);
       continue;
     }
@@ -1182,21 +1188,44 @@ function scoreRow(comment: ScoringComment, result: JevChoiceResult, rubricVersio
   };
 }
 
+/** What the chokepoint did with one step's matches. */
+interface MatchesApplied {
+  applied: number;
+  halt: "credits" | "ledger" | "quota" | null;
+  /**
+   * Comment ids whose decision never started: halted before its YouTube call
+   * (time budget, credits, ledger, breaker, a snapshot failure), or the whole
+   * chokepoint threw. Their scores stay owed a decision, so the next sweep
+   * takes them up again (`sweepDecideBacklog`).
+   */
+  notStarted: Set<string>;
+}
+
 /** Hands matches to the chokepoint; maps its halt onto a stopping rule. */
 async function applyMatches(
   apply: ApplyPort,
   channel: ChannelRef,
   decisions: SweepDecision[],
   deadlineMs: number
-): Promise<{ applied: number; halt: "credits" | "ledger" | "quota" | null }> {
-  if (decisions.length === 0) return { applied: 0, halt: null };
+): Promise<MatchesApplied> {
+  if (decisions.length === 0) return { applied: 0, halt: null, notStarted: new Set() };
   let result: ApplyResult;
   try {
     result = await apply.apply(channel, decisions, { deadlineMs });
   } catch {
-    // The chokepoint logs its own failures; the scores stand, nothing was acted on.
-    return { applied: 0, halt: null };
+    // Nothing is known to have started, so every decision stays owed. A retry
+    // is safe for I4: the chokepoint re-reads moderation_state, and
+    // listUndecided skips a comment with an applied or unknown log row.
+    return { applied: 0, halt: null, notStarted: new Set(decisions.map((d) => d.commentId)) };
   }
+  // Settled: refused (final), or an outcome other than "failed before any
+  // YouTube call". An attempted write may have landed, so it is never redone.
+  const started = new Set<string>();
+  for (const r of result.refused) started.add(r.commentId);
+  for (const o of result.outcomes) {
+    if (!(o.status === "failed" && !o.youtubeAttempted)) started.add(o.commentId);
+  }
+  const notStarted = new Set(decisions.map((d) => d.commentId).filter((id) => !started.has(id)));
   const applied = result.outcomes.filter((o) => o.status === "applied").length;
   const halt =
     result.halted === "credits"
@@ -1206,7 +1235,28 @@ async function applyMatches(
         : result.halted === "quota" || result.halted === "quotaBreaker"
         ? "quota"
         : null;
-  return { applied, halt };
+  return { applied, halt, notStarted };
+}
+
+/**
+ * Stamps `decided_at` on the scores whose decision is taken: every evaluated
+ * comment except those whose decision never started (see MatchesApplied).
+ */
+async function markSettled(
+  store: Pick<SweepStore, "markDecided">,
+  channel: ChannelRef,
+  version: number,
+  evaluated: readonly UndecidedScore[],
+  notStarted: ReadonlySet<string>
+): Promise<void> {
+  const ids = evaluated.map((e) => e.comment.id).filter((id) => !notStarted.has(id));
+  if (ids.length > 0) await store.markDecided(channel.id, ids, version);
+}
+
+/** A credit or quota stop drops the window: the cursor jumps to `at` and any listing resume is forgotten. */
+async function dropWindow(store: SweepStore, youtubeChannelId: string, at: Date): Promise<void> {
+  await store.advanceCursor(youtubeChannelId, at);
+  await store.setListingResume(youtubeChannelId, null);
 }
 
 /**
@@ -1217,13 +1267,21 @@ async function applyMatches(
  * org with no credits. The last two advance the cursor to now, so the missed
  * window is dropped. Then reads `commentThreads.list` pages until a page
  * reaches the cursor (or `maxListPages`), filters them (I5, about-channel,
- * cursor, duplicates), stores the survivors as `pending` and moves the cursor
- * to the newest stored comment.
+ * cursor, duplicates) and stores the survivors as `pending`.
+ *
+ * The cursor only moves once the listing has reached it. When the page limit
+ * stops the listing first, the older comments are still unread: the cursor
+ * stays, and the next page token is stored so the next run resumes there
+ * (newer comments wait one run). When a resumed listing reaches the cursor,
+ * the cursor moves to the newest comment either run saw. A comment in the
+ * cursor's own second is kept (deduped by id on insert).
  *
  * A listing error is never success: a quota error trips the breaker and ends
  * `skipped: quota breaker` (cursor → now); any other ends
  * `skipped: youtube error` with its reason and keeps the cursor, so the next
- * run reads the same window again.
+ * run reads the same window again. A stored resume token YouTube refuses
+ * cannot reach its gap any more: that gap is dropped explicitly
+ * (`listing_resume_rejected`), the cursor moves to the newest comment seen.
  */
 export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<SweepBeginResult> {
   const t = tuning(deps);
@@ -1232,9 +1290,9 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
   const skip = async (
     status: SweepStatus,
     reason: string | null,
-    advanceCursor: boolean
+    dropTheWindow: boolean
   ): Promise<SweepBeginResult> => {
-    if (advanceCursor) await deps.store.advanceCursor(channel.id, now);
+    if (dropTheWindow) await dropWindow(deps.store, channel.id, now);
     await deps.store.setRunStatus(channel.id, status, now);
     return { status, reason, ingested: 0, pagesRead };
   };
@@ -1253,24 +1311,30 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
   await deps.store.expireStaleScoring(channel.id, new Date(now.getTime() - t.staleScoringMs));
 
   const floor = automation.cursor ?? automation.enabledAt ?? now;
+  const resume: ListingResume | null = automation.listingPageToken
+    ? { pageToken: automation.listingPageToken, newest: automation.listingNewest ?? null }
+    : null;
   const threads: RawCommentThread[] = [];
+  let pageToken: string | undefined = resume?.pageToken;
+  let reached = false;
   try {
-    let pageToken: string | undefined;
     do {
       const page = await deps.youtube.listThreads(channel.channelId, pageToken);
       pagesRead++;
       const items = page.items ?? [];
       threads.push(...items);
       pageToken = page.nextPageToken;
-      // YouTube lists newest first: once a page reaches the cursor, the rest is older.
-      const reached =
+      // YouTube lists newest first: once a page goes past the cursor, the rest
+      // is older. Strictly past: a comment in the cursor's own second may
+      // continue on the next page.
+      reached =
+        !pageToken ||
         items.length === 0 ||
         items.some((th) => {
           const at = Date.parse(th?.snippet?.topLevelComment?.snippet?.publishedAt ?? "");
-          return Number.isFinite(at) && at <= floor.getTime();
+          return Number.isFinite(at) && at < floor.getTime();
         });
-      if (reached) break;
-    } while (pageToken && pagesRead < t.maxListPages);
+    } while (!reached && pagesRead < t.maxListPages);
   } catch (err) {
     const cls = deps.classifyListError(err);
     if (cls.quota) {
@@ -1281,25 +1345,93 @@ export async function sweepBegin(deps: SweepDeps, channel: ChannelRef): Promise<
       }
       return skip("skipped: quota breaker", "quota", true);
     }
+    if (resume && cls.badPageToken) {
+      await deps.store.setListingResume(channel.id, null);
+      if (resume.newest) await deps.store.advanceCursor(channel.id, resume.newest);
+      return skip("skipped: youtube error", "listing_resume_rejected", false);
+    }
     return skip("skipped: youtube error", cls.reason, false);
   }
 
   const { comments } = filterIngest(threads, { ownChannelId: channel.channelId, cursor: floor });
   const ingested = comments.length > 0 ? await deps.store.insertComments(channel.id, comments) : 0;
-  let newest: Date | null = null;
+  let newest: Date | null = resume?.newest ?? null;
   for (const c of comments) if (!newest || c.publishedAt > newest) newest = c.publishedAt;
-  if (newest) await deps.store.advanceCursor(channel.id, newest);
+  if (!reached && pageToken) {
+    // Stopped by the page limit before the cursor: resume here next run.
+    await deps.store.setListingResume(channel.id, { pageToken, newest });
+  } else {
+    if (resume) await deps.store.setListingResume(channel.id, null);
+    if (newest) await deps.store.advanceCursor(channel.id, newest);
+  }
   return { status: "continue", reason: null, ingested, pagesRead };
 }
 
+/** The shared ending of a scoring / decision step. */
+function stepEnd(deps: SweepDeps, channel: ChannelRef, counts: ScoringCounts) {
+  return async (status: SweepStatus, reason: string | null, dropTheWindow: boolean): Promise<SweepChunkResult> => {
+    const at = deps.clock.now();
+    if (dropTheWindow) {
+      counts.unscored += await deps.store.dropPending(channel.id);
+      await dropWindow(deps.store, channel.id, at);
+    }
+    await deps.store.setRunStatus(channel.id, status, at);
+    return { status, reason, ...counts };
+  };
+}
+
+/** Owed decisions one sweep takes up at most, in its decision step. */
+export const DECISION_BACKLOG_LIMIT = 100;
+
 /**
- * Step 2..n of a sweep: claim up to `chunkSize` pending comments, score each
+ * Step 2 of a sweep: decisions still owed. A stored score of the published
+ * version whose decision never started — the chokepoint's time budget or a
+ * halt stopped it before its YouTube call, or the chokepoint threw — keeps a
+ * null `decided_at`. This step re-evaluates up to DECISION_BACKLOG_LIMIT of
+ * them with the current rules (no Jev call, no scoring credit) and hands the
+ * matches to the chokepoint, which re-checks I4 on the current state and
+ * charges and caps as usual. Quota and ledger halts stop the run as in
+ * `sweepScoreChunk`; a credit halt only ends this step (the owed decisions
+ * wait), so a balance that still covers 1-credit scores is not wasted.
+ */
+export async function sweepDecideBacklog(deps: SweepDeps, channel: ChannelRef): Promise<SweepChunkResult> {
+  const t = tuning(deps);
+  const stepStartMs = deps.clock.now().getTime();
+  const counts = zeroCounts();
+  const end = stepEnd(deps, channel, counts);
+
+  if (!channel.organizationId) return end("skipped: disabled", "no_organization", false);
+  const rubric = await deps.store.getPublishedRubric(channel.id);
+  if (!rubric) return end("skipped: no published rubric", null, false);
+  if (await deps.quota.isTripped()) return end("skipped: quota breaker", "quota_breaker", true);
+
+  const owed = await deps.store.listUndecided(channel.id, rubric.version, DECISION_BACKLOG_LIMIT);
+  if (owed.length === 0) return { status: "continue", reason: null, ...counts };
+  const rules = await deps.store.getRules(channel.id);
+  const { decisions } = decide(rules, owed, rubric.version);
+  counts.decisions = decisions.length;
+  const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
+  counts.applied = applied.applied;
+  await markSettled(deps.store, channel, rubric.version, owed, applied.notStarted);
+
+  if (applied.halt === "quota") return end("skipped: quota breaker", "quota", true);
+  if (applied.halt === "ledger") return end("done", "credit_ledger_error", false);
+  // A balance too small for a 50-credit action may still pay for 1-credit
+  // scores: the owed decisions wait, and the scoring steps apply the usual
+  // out-of-credits rule to their own charges.
+  return { status: "continue", reason: applied.halt === "credits" ? "insufficient_credits" : null, ...counts };
+}
+
+/**
+ * Step 3..n of a sweep: claim up to `chunkSize` pending comments, score each
  * once (1 credit, refunded on failure), store the scores, and pass matches
  * to the chokepoint through `deps.apply` (I2–I6 live there).
  *
  * - A Jev failure (429/529/timeout after the SDK's retries) leaves the comment
  *   `unscored`: never retried, never acted on.
  * - Claimed comments whose call never started go back to `pending`.
+ * - A score leaves "owed a decision" only once its decision started (see
+ *   `sweepDecideBacklog`).
  * - Out of credits (scoring or the chokepoint) or the quota breaker ends
  *   the run: the rest of the pending comments are dropped to `unscored` and
  *   the cursor moves to now (missed windows are dropped).
@@ -1309,15 +1441,7 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
   const t = tuning(deps);
   const stepStartMs = deps.clock.now().getTime();
   const counts = zeroCounts();
-  const end = async (status: SweepStatus, reason: string | null, dropWindow: boolean): Promise<SweepChunkResult> => {
-    const at = deps.clock.now();
-    if (dropWindow) {
-      counts.unscored += await deps.store.dropPending(channel.id);
-      await deps.store.advanceCursor(channel.id, at);
-    }
-    await deps.store.setRunStatus(channel.id, status, at);
-    return { status, reason, ...counts };
-  };
+  const end = stepEnd(deps, channel, counts);
 
   const organizationId = channel.organizationId;
   if (!organizationId) return end("skipped: disabled", "no_organization", false);
@@ -1350,10 +1474,12 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
     await deps.store.unclaim(channel.id, waiting.map((c) => c.id));
   }
 
-  const { decisions } = decide(rules, batch.scored, rubric.version);
+  const evaluated = toEvaluated(batch.scored);
+  const { decisions } = decide(rules, evaluated, rubric.version);
   counts.decisions = decisions.length;
   const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
   counts.applied = applied.applied;
+  await markSettled(deps.store, channel, rubric.version, evaluated, applied.notStarted);
 
   if (batch.stop === "credits" || applied.halt === "credits") {
     return end("skipped: out of credits", "insufficient_credits", true);
@@ -1367,10 +1493,15 @@ export async function sweepScoreChunk(deps: SweepDeps, channel: ChannelRef): Pro
   return { status: "continue", reason: null, ...counts };
 }
 
+function toEvaluated(scored: ScoreBatch["scored"]): UndecidedScore[] {
+  return scored.map(({ comment, result }) => ({ comment, probabilities: result.probabilities }));
+}
+
 /**
- * A whole sweep in one call: `sweepBegin`, then `sweepScoreChunk` until it
- * reaches a terminal state or `maxChunks` (the rest stay pending for the next
- * run). The workflow runs the same functions, one per step.
+ * A whole sweep in one call: `sweepBegin`, `sweepDecideBacklog`, then
+ * `sweepScoreChunk` until it reaches a terminal state or `maxChunks` (the
+ * rest stay pending for the next run). The workflow runs the same functions,
+ * one per step.
  */
 export async function sweepChannel(
   deps: SweepDeps,
@@ -1387,6 +1518,9 @@ export async function sweepChannel(
     ...zeroCounts(),
   };
   if (begin.status !== "continue") return { ...out, status: begin.status };
+  const backlog = await sweepDecideBacklog(deps, channel);
+  addCounts(out, backlog);
+  if (backlog.status !== "continue") return { ...out, status: backlog.status, reason: backlog.reason };
   const maxChunks = opts.maxChunks ?? MAX_SWEEP_CHUNKS;
   for (let i = 0; i < maxChunks; i++) {
     const chunk = await sweepScoreChunk(deps, channel);
@@ -1414,6 +1548,9 @@ export async function sweepChannel(
  *   comment that now matches no rule goes to `maybeRelease`; every other
  *   state is scored and left alone.
  * - A failed Jev call is refunded and leaves the old score in place.
+ * - A decision that never started (time budget, halt, a chokepoint throw)
+ *   leaves the new score owed a decision; the sweep's `sweepDecideBacklog`
+ *   takes it up.
  * - `done` when no candidate is left. Pass `nextAfterId` to the next step.
  */
 export async function reclassifyChunk(
@@ -1460,10 +1597,14 @@ export async function reclassifyChunk(
         ? afterId
         : rows[batch.firstUnfinished - 1]!.id;
 
-  const { decisions, maybeRelease } = decide(rules, batch.scored, version);
+  const evaluated = toEvaluated(batch.scored);
+  const { decisions, maybeRelease } = decide(rules, evaluated, version);
   counts.decisions = decisions.length;
   const applied = await applyMatches(deps.apply, channel, decisions, stepStartMs + t.stepBudgetMs);
   counts.applied = applied.applied;
+  // A decision that never started stays owed; the sweep's decision step
+  // takes it up while this version is the published one.
+  await markSettled(deps.store, channel, version, evaluated, applied.notStarted);
 
   if (batch.stop === "credits" || applied.halt === "credits") {
     return result("out of credits", null, nextAfterId, maybeRelease);

@@ -13,6 +13,7 @@ const {
   sweepBegin,
   sweepChannel,
   sweepScoreChunk,
+  sweepDecideBacklog,
   SCORE_CREDITS,
   MODERATION_WRITE_CREDITS,
 } = await import("../../src/lib/moderation/core.ts");
@@ -102,6 +103,8 @@ function harness(opts = {}) {
   const ytWrites = [];
   const jevRequests = [];
   const applyCalls = [];
+  const actionLog = [];
+  let applyThrows = opts.applyThrows ?? 0;
   let rowSeq = 0;
   let inFlight = 0;
   let maxInFlight = 0;
@@ -236,6 +239,28 @@ function harness(opts = {}) {
     async listForReclassify() {
       throw new Error("the sweep never reclassifies");
     },
+    async setListingResume(_ch, resume) {
+      if (!automation) return;
+      automation.listingPageToken = resume ? resume.pageToken : null;
+      automation.listingNewest = resume ? resume.newest : null;
+    },
+    async listUndecided(_ch, version, limit) {
+      const out = [];
+      for (const sc of scores) {
+        if (sc.rubricVersion !== version || sc.decidedAt) continue;
+        const r = comments.get(sc.commentId);
+        if (!r || r.scoreStatus !== "scored" || !["none", "flagged"].includes(r.moderationState)) continue;
+        // "We may have acted": an applied or unknown action-log row excludes it.
+        if (actionLog.some((a) => a.commentId === r.id && (a.status === "applied" || a.status === "unknown"))) continue;
+        out.push({ comment: withTitle(r), probabilities: sc.probabilities });
+      }
+      return out.slice(0, limit);
+    },
+    async markDecided(_ch, ids, version) {
+      for (const sc of scores) {
+        if (sc.rubricVersion === version && ids.includes(sc.commentId)) sc.decidedAt ??= new Date(nowMs);
+      }
+    },
     async listForDryRun(_ch, limit) {
       return [...comments.values()].slice(0, limit).map(withTitle);
     },
@@ -278,6 +303,7 @@ function harness(opts = {}) {
     async deleteComment(...args) {
       ytWrites.push({ fn: "deleteComment", args });
       events.push({ type: "youtube", fn: "deleteComment" });
+      if (opts.ytDeleteError) throw opts.ytDeleteError();
     },
   };
   const counters = { rejectBan: 0, delete: 0 };
@@ -310,15 +336,20 @@ function harness(opts = {}) {
       async recordOutcomes(_ch, _actor, outcomes) {
         const STATE = { flag: "flagged", hold: "held", reject: "rejected", ban: "banned", delete: "deleted" };
         for (const o of outcomes) {
+          actionLog.push(o);
           if (o.status === "applied") comments.get(o.commentId).moderationState = STATE[o.appliedAction];
         }
       },
     },
-    classifyError: () => ({ definitive: false, halt: null }),
+    classifyError: opts.classifyError ?? (() => ({ definitive: false, halt: null })),
   };
   const apply = {
     async apply(channel, decisions, applyOpts) {
       applyCalls.push(decisions.map((d) => ({ ...d })));
+      if (applyThrows > 0) {
+        applyThrows--;
+        throw new Error("chokepoint crashed (fake)");
+      }
       const stored = decisions.map((d) => ({
         comment: rowToStored(comments.get(d.commentId)),
         action: d.action,
@@ -358,6 +389,7 @@ function harness(opts = {}) {
     jevRequests,
     jevStarts,
     applyCalls,
+    actionLog,
     runStatuses,
     get automation() {
       return automation;
@@ -937,4 +969,143 @@ test("R1 #1: applyDecisions halts `ledger`, not `credits`, when the ledger error
   assert.equal(res.outcomes[0].status, "failed");
   assert.equal(res.outcomes[0].error, "ledger");
   assert.equal(h.ytWrites.length, 0);
+});
+
+test("R1 #3: the page limit keeps the cursor; the next run resumes the unread pages, then advances", async () => {
+  const page = (from) =>
+    Array.from({ length: 3 }, (_, i) => thread({ id: `yt-${from - i}`, text: `c${from - i}`, minutesAfter: from - i }));
+  const h = harness({
+    // Newest first: +50..+48, +47..+45, +44..+42, then a page that reaches the cursor.
+    pages: [page(50), page(47), page(44), [thread({ id: "yt-old", text: "old", minutesAfter: -5 })]],
+    tuning: { maxListPages: 2 },
+    rules: [],
+  });
+  const first = await sweepBegin(h.deps, CHANNEL);
+  assert.equal(first.pagesRead, 2);
+  assert.equal(first.ingested, 6);
+  assert.equal(h.automation.cursor.getTime(), ENABLED_AT.getTime(), "cursor not moved past unread pages");
+  assert.equal(h.automation.listingPageToken, "p2", "where the next run resumes");
+
+  const second = await sweepBegin(h.deps, CHANNEL);
+  assert.deepEqual(h.listCalls.slice(2).map((a) => a[1]), ["p2", "p3"], "resumes from the stored page");
+  assert.equal(second.ingested, 3, "the older unread comments are ingested");
+  for (const n of [44, 43, 42]) assert.ok(h.byText(`c${n}`), `c${n} ingested`);
+  assert.equal(h.byText("old"), undefined, "before the cursor: not ingested");
+  assert.equal(
+    h.automation.cursor.toISOString(),
+    new Date(ENABLED_AT.getTime() + 50 * 60_000).toISOString(),
+    "once the gap is read, the cursor moves to the newest comment seen"
+  );
+  assert.equal(h.automation.listingPageToken, null);
+});
+
+test("R1 #3: a comment in the same second as the cursor is ingested; a stored one is not duplicated", async () => {
+  const at = 30;
+  const h = harness({
+    automation: { cursor: new Date(ENABLED_AT.getTime() + at * 60_000) },
+    pages: [
+      [
+        thread({ id: "yt-late", text: "same second, listed late", minutesAfter: at }),
+        thread({ id: "yt-before", text: "before", minutesAfter: at - 1 }),
+      ],
+    ],
+    rules: [],
+  });
+  const out = await sweepBegin(h.deps, CHANNEL);
+  assert.equal(out.ingested, 1);
+  assert.ok(h.byText("same second, listed late"), "not dropped at the cursor edge");
+  assert.equal(h.byText("before"), undefined);
+  // The next run lists it again: deduped by id, never stored twice.
+  const again = await sweepBegin(h.deps, CHANNEL);
+  assert.equal(again.ingested, 0);
+  assert.equal([...h.comments.values()].filter((r) => r.commentId === "yt-late").length, 1);
+});
+
+test("R1 #4: a decision the time budget never started is applied by the next sweep, without re-scoring", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({
+    pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]],
+    // The chokepoint's deadline leaves no room for a 15 s YouTube call.
+    tuning: { stepBudgetMs: 10_000 },
+  });
+  const first = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(first.scored, 1);
+  assert.equal(h.ytWrites.length, 0);
+  assert.equal(h.byText(spam).moderationState, "none");
+  assert.equal(h.actionLog.at(-1).error, "timeBudget");
+
+  h.deps.tuning = {};
+  const jevBefore = h.jevRequests.length;
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.jevRequests.length, jevBefore, "not scored again");
+  assert.equal(h.byText(spam).moderationState, "deleted");
+  assert.deepEqual(charges(h), [SCORE_CREDITS, MODERATION_WRITE_CREDITS]);
+
+  // A third sweep sends nothing more (I4, and the decision is settled).
+  const writes = h.ytWrites.length;
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.ytWrites.length, writes);
+});
+
+test("R1 #4: a throw from the chokepoint leaves the decision for the next sweep", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({ pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]], applyThrows: 1 });
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.byText(spam).moderationState, "none");
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.byText(spam).moderationState, "deleted");
+  assert.equal(h.jevRequests.length, 1, "scored once");
+});
+
+for (const [kind, definitive] of [["definitive 4xx", true], ["ambiguous 5xx", false]]) {
+  test(`R1 #4: an attempted decision is settled: a ${kind} is not sent again by the next sweep`, async () => {
+    const spam = "Read AI Millionaire FastScale by Mark Voss";
+    const h = harness({
+      pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]],
+      ytDeleteError: () => Object.assign(new Error("youtube"), { status: definitive ? 404 : 503 }),
+      classifyError: () => ({ definitive, halt: null }),
+    });
+    await sweepChannel(h.deps, CHANNEL);
+    assert.equal(h.ytWrites.length, 1);
+    await sweepChannel(h.deps, CHANNEL);
+    assert.equal(h.ytWrites.length, 1, "not sent again");
+    assert.equal(h.byText(spam).moderationState, "none");
+  });
+}
+
+test("R1 #4: sweepDecideBacklog re-evaluates only undecided scores of the published version", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({
+    pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]],
+    tuning: { stepBudgetMs: 10_000 },
+  });
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.byText(spam).moderationState, "none");
+  // A newer rubric is published: the v1 score is not the current one, so nothing is applied.
+  h.setRubric({ ...RUBRIC, version: 2 });
+  h.deps.tuning = {};
+  const res = await sweepDecideBacklog(h.deps, CHANNEL);
+  assert.equal(res.decisions, 0);
+  assert.equal(h.byText(spam).moderationState, "none");
+});
+
+test("R1 #4: an owed decision the balance cannot pay for waits; new comments are still scored", async () => {
+  const spam = "Read AI Millionaire FastScale by Mark Voss";
+  const h = harness({
+    pages: [[thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]],
+    tuning: { stepBudgetMs: 10_000 },
+    rules: [{ id: "r-rej", label: "spam", threshold: 0.9, action: "reject" }],
+  });
+  await sweepChannel(h.deps, CHANNEL);
+  assert.equal(h.byText(spam).moderationState, "none");
+  // 20 credits left: enough to score, not enough for a 50-credit reject.
+  h.deps.credits.charge = ((orig) => async (org, amount) => (amount > 20 ? { outcome: "insufficient", refundable: 0 } : orig(org, amount)))(
+    h.deps.credits.charge
+  );
+  h.deps.tuning = {};
+  h.setPages([[thread({ id: "yt-new", text: "Great video!", minutesAfter: 45 }), thread({ id: "yt-spam", text: spam, minutesAfter: 40 })]]);
+  const out = await sweepChannel(h.deps, CHANNEL);
+  assert.equal(out.status, "done");
+  assert.equal(h.byText("Great video!").scoreStatus, "scored", "the new comment is scored");
+  assert.equal(h.byText(spam).moderationState, "none");
 });

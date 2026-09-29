@@ -194,7 +194,7 @@ export async function setChannelAutomation(
     }
 
     const set = turningOn
-      ? { enabled: true, enabledAt: now, cursor: now, updatedAt: now }
+      ? { enabled: true, enabledAt: now, cursor: now, listingPageToken: null, listingNewest: null, updatedAt: now }
       : { enabled: input.enabled, updatedAt: now };
     const [row] = await tx
       .insert(commentAutomation)
