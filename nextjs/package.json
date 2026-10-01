@@ -56,7 +56,7 @@
     "@trpc/react-query": "^10.45.2",
     "@trpc/server": "^10.45.2",
     "@types/mdx": "^2.0.13",
-    "axios": "1.18.0",
+    "axios": "^1.20.0",
     "better-auth": "^1.6.25",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -157,7 +157,8 @@
       "metro-source-map": "0.84.5",
       "metro-symbolicate": "0.84.5",
       "metro-transform-plugins": "0.84.5",
-      "metro-transform-worker": "0.84.5"
+      "metro-transform-worker": "0.84.5",
+      "axios": "^1.20.0"
     }
   },
   "ct3aMetadata": {
