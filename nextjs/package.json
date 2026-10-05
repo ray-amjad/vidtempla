@@ -159,7 +159,8 @@
       "metro-transform-plugins": "0.84.5",
       "metro-transform-worker": "0.84.5",
       "piscina": "^4.9.4",
-      "axios": "^1.20.0"
+      "axios": "^1.20.0",
+      "http-cache-semantics": "^4.3.0"
     }
   },
   "ct3aMetadata": {
