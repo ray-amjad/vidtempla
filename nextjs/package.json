@@ -75,7 +75,7 @@
     "posthog-node": "^5.13.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "sonner": "^2.0.7",
     "stripe": "^20.4.1",
     "superjson": "2.2.2",
@@ -137,7 +137,7 @@
       "path-to-regexp@6": "^6.3.0",
       "path-to-regexp@8": "^8.4.0",
       "postcss": "^8.5.18",
-      "sharp": "^0.35.4",
+      "sharp": "^0.35.5",
       "smol-toml": "^1.7.1",
       "undici@6": "^6.27.0",
       "undici@7": "^7.29.0",
@@ -160,7 +160,11 @@
       "metro-transform-worker": "0.84.5",
       "piscina": "^4.9.4",
       "axios": "^1.20.0",
-      "http-cache-semantics": "^4.3.0"
+      "proxy-addr": "^2.0.8",
+      "shell-quote": "^1.11.0",
+      "compression": "^1.8.2",
+      "http-cache-semantics": "^4.3.0",
+      "source-map-js": "^1.2.2"
     }
   },
   "ct3aMetadata": {
